@@ -388,7 +388,6 @@ async function handleFounderPanelButton(interaction) {
   if (action === "confirmdeletecategory") {
     const categoryId = parts[3] || "";
     await interaction.deferUpdate();
-    const {ObjectId}=await import("mongodb");
     if (!ObjectId.isValid(categoryId)) { await interaction.editReply(v2Payload({content:"Kategori tidak valid.",flags:EPHEMERAL|MessageFlags.IsComponentsV2})); return; }
     const categoryRecord = await db.collection("categories").findOne({_id:new ObjectId(categoryId)});
     if (!categoryRecord) { await interaction.editReply(v2Payload({content:"Kategori tidak ditemukan atau sudah dihapus.",flags:EPHEMERAL|MessageFlags.IsComponentsV2})); return; }
@@ -407,7 +406,6 @@ async function handleFounderPanelButton(interaction) {
   if (action === "confirmdeleteproduct") {
     const id = parts[3] || "";
     await interaction.deferUpdate();
-    const {ObjectId}=await import("mongodb");
     if (!ObjectId.isValid(id)) { await interaction.editReply(v2Payload({content:"ID produk tidak valid.",flags:EPHEMERAL|MessageFlags.IsComponentsV2})); return; }
     const product = await db.collection("products").findOne({_id:new ObjectId(id)});
     if (!product) { await interaction.editReply(v2Payload({content:"Produk tidak ditemukan atau sudah dihapus.",flags:EPHEMERAL|MessageFlags.IsComponentsV2})); return; }
@@ -466,7 +464,6 @@ async function handleFounderPanelSelect(interaction) {
     ));
     return;
   }
-  const {ObjectId} = await import("mongodb");
   if (mode === "editproduct") {
     const id = interaction.values[0];
     if (!ObjectId.isValid(id)) {
@@ -537,7 +534,6 @@ async function handleFounderPanelModal(interaction) {
     }
 
     const reference = parts[4] || "";
-    const {ObjectId} = await import("mongodb");
     const isIdReference = reference.startsWith("id-") || ObjectId.isValid(reference);
     const idReference = reference.startsWith("id-") ? reference.slice(3) : reference;
     const encodedName = reference.startsWith("name-") ? reference.slice(5) : reference;
@@ -599,7 +595,6 @@ async function handleFounderPanelModal(interaction) {
   }
 
   const id = parts[3] || "";
-  const {ObjectId} = await import("mongodb");
   if (!ObjectId.isValid(id)) {
     await interaction.editReply(v2Payload({content:"ID produk tidak valid.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
     return;
