@@ -36,6 +36,7 @@ For a new install, run `npm install`, copy `.env.example` to `.env`, then set `D
 
 ## Tickets
 - Order channels use persistent sequential names such as `rap-1`, `rap-2`; consultation channels use a separate counter such as `tanya-0`, `tanya-1`.
+- Every ticket receives one random public `ticketCode` (5–10 characters, e.g. `&JI$U`). The same code is stored on the ticket and order, displayed below the order status, included in the ticket channel topic, and used in the transcript HTML filename. The MongoDB `_id` remains an internal database key. This shared code is intended to support future lookups such as `/cektranscript ID`.
 - Counters are stored in MongoDB's `counters` collection and are not reused when a ticket closes or the bot restarts. If channel creation fails after a number is allocated, that number can be skipped rather than reused.
 - Each user can have only one open ticket per server, regardless of ticket type.
 - Tickets are created under `SUPPORT_CATEGORY_ID`. Category and product dropdowns in order tickets reuse their saved custom/unicode emojis from the catalog.
