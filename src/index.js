@@ -773,13 +773,13 @@ async function handleCatalogSelection(interaction) {
         ));
         await channel.send({ flags: MessageFlags.IsComponentsV2, components: [ticketWelcome] });
       }
-      await interaction.followUp(v2Payload({ content: "✓ Tiket berhasil dibuat: <#" + channel.id + ">.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
     } catch (error) {
       await db.collection("tickets").deleteOne({ channelId: channel.id }).catch(() => {});
       await db.collection("orders").deleteMany({ channelId: channel.id, status: "ON HOLD" }).catch(() => {});
       await channel.delete("Failed to initialize catalog ticket").catch(() => {});
       throw error;
     }
+    await interaction.followUp(v2Payload({ content: "✓ Tiket berhasil dibuat: <#" + channel.id + ">.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
     } finally {
       await reservations.deleteOne({ guildId: interaction.guildId, buyerId: interaction.user.id, interactionId: interaction.id }).catch(error => logError("ticket-reservation-release", error));
     }
