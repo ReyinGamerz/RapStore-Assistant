@@ -202,26 +202,34 @@ async function renderCatalogPanel(interaction, selectedCategory = "", selectedPr
 
   const lines = [];
   if (!category) {
-    lines.push("Silakan pilih kategori terlebih dahulu.");
-    lines.push("Produk akan tampil setelah kategori dipilih.");
-  } else if (!list.length) {
-    lines.push("**Kategori:** " + category);
-    lines.push("Belum ada produk aktif di kategori ini.");
+    lines.push("Pilih kategori dari menu di bawah untuk melihat katalog produk.");
   } else {
-    lines.push("**Kategori:** " + category);
-    for (const product of list) {
-      const retail = Number(product.price || 0);
-      const reseller = Number.isSafeInteger(product.resellerPrice) && product.resellerPrice > 0 ? product.resellerPrice : retail;
-      const name = safeText(product.name, 100);
-      const isServerBoost = /server\s*boost/i.test(name) || /server\s*boost/i.test(safeText(product.category || "", 80));
-      lines.push("### " + name);
-      lines.push(isServerBoost
-        ? "Harga: " + formatPrice(retail) + " | Reseller " + formatPrice(reseller)
-        : "**Harga:** " + formatPrice(retail) + " | **Reseller:** " + formatPrice(reseller));
+    lines.push("**Category:** " + category);
+    if (!list.length) {
+      lines.push("Belum ada produk aktif di kategori ini.");
+    } else {
+      for (const product of list) {
+        const retail = Number(product.price || 0);
+        const reseller = Number.isSafeInteger(product.resellerPrice) && product.resellerPrice > 0 ? product.resellerPrice : retail;
+        const name = safeText(product.name, 100);
+        const description = String(product.description || "")
+          .replace(/\r\n/g, "\n")
+          .replace(/\\n/g, "\n")
+          .replace(/\r/g, "\n")
+          .trim();
+        lines.push("### " + (/server\s*boost/i.test(name) ? "💎 " : "✨ ") + name);
+        if (description) {
+          lines.push(description.slice(0, 900));
+          lines.push("");
+          lines.push("Retail: " + formatPrice(retail) + "  |  Reseller: " + formatPrice(reseller));
+        } else {
+          lines.push("Retail: " + formatPrice(retail) + "  |  Reseller: " + formatPrice(reseller));
+        }
+      }
     }
   }
 
-  const panel = buildPanel("🛍️ RAPSTORE - CATALOG");
+  const panel = buildPanel("🛍️ GC — CATALOG PRODUCTS");
   panel.addSeparatorComponents(new SeparatorBuilder());
   panel.addTextDisplayComponents(new TextDisplayBuilder().setContent(lines.join("\n").slice(0, 3900)));
   panel.addSeparatorComponents(new SeparatorBuilder());
@@ -231,7 +239,7 @@ async function renderCatalogPanel(interaction, selectedCategory = "", selectedPr
     .setPlaceholder(category ? ("Kategori: " + category).slice(0, 150) : "Pilih Kategori")
     .setMinValues(1).setMaxValues(1)
     .addOptions((categories.length ? categories : ["Belum ada kategori"]).slice(0, 25).map(c => ({
-      label: c.slice(0, 100), value: c, description: "Tampilkan produk kategori ini",
+      label: c.slice(0, 100), value: c, description: "Buka katalog kategori " + c,
     })));
   if (!categories.length) categoryMenu.setDisabled(true);
 
@@ -240,17 +248,33 @@ async function renderCatalogPanel(interaction, selectedCategory = "", selectedPr
     .setPlaceholder(selectedProduct ? safeText(selectedProduct.name, 150) : "Pilih Produk")
     .setMinValues(1).setMaxValues(1);
   const productOptions = list.slice(0, 25).map(p => ({
-    label: safeText(p.name, 100), value: String(p._id),
-    description: (formatPrice(p.price) + " • " + safeText(p.category || "Umum", 30)).slice(0, 100),
+    label: safeText(p.name, 100),
+    value: String(p._id),
+    description: ("Lihat informasi produk • " + formatPrice(p.price)).slice(0, 100),
   }));
   if (productOptions.length) productMenu.addOptions(productOptions);
-  else productMenu.addOptions([{ label: category ? "Tidak ada produk" : "Pilih kategori dulu", value: "none", description: "Pilih kategori sebelum memilih produk" }]).setDisabled(true);
+  else productMenu.addOptions([{
+    label: category ? "Tidak ada produk" : "Pilih kategori dulu",
+    value: "none",
+    description: "Pilih kategori untuk melihat produk yang tersedia",
+  }]).setDisabled(true);
 
   const ticketMenu = new StringSelectMenuBuilder()
     .setCustomId("rapstore:catalog:ticket")
     .setPlaceholder("Pilih Tujuan Tiket")
     .setMinValues(1).setMaxValues(1)
-    .addOptions([{ label: "Tanya Tanya Produk", value: selectedProduct ? ("product_question:" + String(selectedProduct._id)) : "product_question", description: selectedProduct ? "Tanya tentang " + safeText(selectedProduct.name, 70) : "Buat tiket privat untuk bertanya tentang produk" }]);
+    .addOptions([
+      {
+        label: "ORDER SEKARANG",
+        value: selectedProduct ? ("order_now:" + String(selectedProduct._id)) : "order_now",
+        description: "Buat tiket untuk melakukan pemesanan",
+      },
+      {
+        label: "TANYA-TANYA DULU",
+        value: selectedProduct ? ("product_question:" + String(selectedProduct._id)) : "product_question",
+        description: "Buat tiket untuk bertanya sebelum memesan",
+      },
+    ]);
 
   panel.addActionRowComponents(new ActionRowBuilder().addComponents(categoryMenu));
   panel.addActionRowComponents(new ActionRowBuilder().addComponents(productMenu));
@@ -286,21 +310,35 @@ async function handleCatalogSelection(interaction) {
   }
   if (interaction.customId === "rapstore:catalog:ticket") {
     const [ticketType, selectedProductId] = String(interaction.values[0] || "").split(":");
+    if (!["order_now", "product_question"].includes(ticketType)) {
+      await interaction.followUp(v2Payload({ content: "Tujuan tiket tidak valid. Silakan pilih ulang.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
+      return;
+    }
     if (!interaction.inGuild()) {
       await interaction.followUp(v2Payload({ content: "Tiket hanya bisa dibuat di server Discord.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
       return;
     }
-    const selectedProduct = selectedProductId ? await db.collection("products").findOne({ _id: (await import("mongodb")).ObjectId.createFromHexString(selectedProductId), active: true }) : null;
-    const existing = await db.collection("tickets").findOne({ guildId: interaction.guildId, buyerId: interaction.user.id, type: "product_question", status: "open" });
+    const { ObjectId } = await import("mongodb");
+    let selectedProduct = null;
+    if (selectedProductId && ObjectId.isValid(selectedProductId)) {
+      selectedProduct = await db.collection("products").findOne({ _id: new ObjectId(selectedProductId), active: true });
+    }
+    const existing = await db.collection("tickets").findOne({
+      guildId: interaction.guildId,
+      buyerId: interaction.user.id,
+      type: ticketType,
+      status: "open",
+    });
     if (existing) {
-      await interaction.followUp(v2Payload({ content: "Lu sudah punya tiket pertanyaan yang masih terbuka: <#" + existing.channelId + ">.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
+      await interaction.followUp(v2Payload({ content: "Lu sudah punya tiket yang masih terbuka: <#" + existing.channelId + ">.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
       return;
     }
+    const isOrder = ticketType === "order_now";
     const channel = await interaction.guild.channels.create({
-      name: "tanya-produk-" + (interaction.user.username.toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 12) || "buyer"),
+      name: (isOrder ? "order-" : "tanya-produk-") + (interaction.user.username.toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 12) || "buyer"),
       type: ChannelType.GuildText,
       parent: config.ids.supportCategory || undefined,
-      topic: "RapStore product question; buyer " + interaction.user.id,
+      topic: "RapStore " + ticketType + "; buyer " + interaction.user.id,
       permissionOverwrites: [
         { id: interaction.guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
         { id: interaction.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles] },
@@ -310,12 +348,24 @@ async function handleCatalogSelection(interaction) {
       ],
     });
     try {
-      await db.collection("tickets").insertOne({ guildId: interaction.guildId, buyerId: interaction.user.id, channelId: channel.id, type: "product_question", productId: selectedProduct ? String(selectedProduct._id) : null, productName: selectedProduct ? safeText(selectedProduct.name, 100) : null, status: "open", createdAt: new Date() });
-      const productLine = selectedProduct ? "\\nProduk yang ditanyakan: **" + safeText(selectedProduct.name, 100) + "**" : "";
-      await channel.send(v2SendPayload("**RAPSTORE — TANYA PRODUK**\\nHalo <@" + interaction.user.id + ">! Silakan tulis pertanyaan produk lu di sini." + productLine + "\\n\\nJangan kirim password atau data sensitif."));
-      await interaction.followUp(v2Payload({ content: "✓ Tiket pertanyaan produk berhasil dibuat: <#" + channel.id + ">.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
+      await db.collection("tickets").insertOne({
+        guildId: interaction.guildId,
+        buyerId: interaction.user.id,
+        channelId: channel.id,
+        type: ticketType,
+        productId: selectedProduct ? String(selectedProduct._id) : null,
+        productName: selectedProduct ? safeText(selectedProduct.name, 100) : null,
+        status: "open",
+        createdAt: new Date(),
+      });
+      const productLine = selectedProduct ? "\nProduk yang dipilih: **" + safeText(selectedProduct.name, 100) + "**" : "\nProduk belum dipilih dari katalog.";
+      const intro = isOrder
+        ? "**RAPSTORE — ORDER SEKARANG**\nHalo <@" + interaction.user.id + ">! Staf akan membantu melanjutkan pemesanan lu."
+        : "**RAPSTORE — TANYA-TANYA DULU**\nHalo <@" + interaction.user.id + ">! Silakan tulis pertanyaan produk lu di sini.";
+      await channel.send(v2SendPayload(intro + productLine + "\n\nJangan kirim password atau data sensitif."));
+      await interaction.followUp(v2Payload({ content: "✓ Tiket berhasil dibuat: <#" + channel.id + ">.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
     } catch (error) {
-      await channel.delete("Failed to initialize product question ticket").catch(() => {});
+      await channel.delete("Failed to initialize catalog ticket").catch(() => {});
       throw error;
     }
   }
