@@ -536,6 +536,19 @@ async function runOrderMaintenance(client) {
             $set: { status: "missing_channel", closeReason: "channel_missing_before_archive", closeBlockedAt: new Date() },
             $unset: { archiveProcessingAt: "" },
           });
+          await db.collection("orders").updateMany({
+            guildId: staleTicket.guildId,
+            channelId: staleTicket.channelId,
+            status: "DONE",
+            ticketClosedAt: { $exists: false },
+          }, {
+            $set: {
+              ticketCloseBlockedAt: new Date(),
+              ticketCloseBlockedReason: "channel_missing_before_archive",
+              updatedAt: new Date(),
+            },
+            $unset: { closeProcessingAt: "" },
+          });
           console.error("[ticket-archive-recovery] Channel is confirmed missing; transcript cannot be reconstructed:", staleTicket.channelId);
         }
       } catch (error) {
@@ -593,11 +606,13 @@ async function runOrderMaintenance(client) {
           await archiveAndDeleteTicket({ channel, ticket, client, closedBy: "system", reason: "order_done_auto_close" });
         } else if (channel && ticket?.status === "closed" && ticket.transcriptFileName) {
           await channel.delete("RapStore ticket already archived as " + ticket.transcriptFileName);
-        } else if (!channel && ticket && ["open", "closing"].includes(ticket.status)) {
-          await db.collection("tickets").updateOne({ _id: ticket._id, status: ticket.status }, {
-            $set: { status: "missing_channel", closedAt: new Date(), closeReason: "channel_missing_before_auto_close", closeBlockedAt: new Date() },
-            $unset: { archiveProcessingAt: "" },
-          });
+        } else if (!channel) {
+          if (ticket && ["open", "closing"].includes(ticket.status)) {
+            await db.collection("tickets").updateOne({ _id: ticket._id, status: ticket.status }, {
+              $set: { status: "missing_channel", closedAt: new Date(), closeReason: "channel_missing_before_auto_close", closeBlockedAt: new Date() },
+              $unset: { archiveProcessingAt: "" },
+            });
+          }
           await db.collection("orders").updateOne({ _id: candidate._id }, {
             $set: { ticketCloseBlockedAt: new Date(), ticketCloseBlockedReason: "channel_missing_before_archive", updatedAt: new Date() },
             $unset: { closeProcessingAt: "" },
