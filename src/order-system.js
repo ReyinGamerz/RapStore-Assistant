@@ -428,6 +428,53 @@ async function reconcilePaymentProofStatuses(db, client) {
   }
 }
 
+async function reconcileTerminalPaymentReviewNotices(db, client) {
+  const proofs = await db.collection("payment_proofs").find({
+    status: { $in: ["accepted", "rejected", "superseded"] },
+    reviewMessageId: { $exists: true, $ne: "" },
+  }).sort({ updatedAt: -1 }).limit(100).toArray();
+
+  for (const proof of proofs) {
+    try {
+      const channelId = String(proof.reviewChannelId || proof.channelId || "");
+      const channel = channelId ? await client.channels.fetch(channelId).catch(() => null) : null;
+      if (!channel?.messages) continue;
+      const message = await channel.messages.fetch(String(proof.reviewMessageId)).catch(() => null);
+      if (!message || !paymentReviewMessageHasProof(message, proof._id)) continue;
+
+      let order = null;
+      if (ObjectId.isValid(String(proof.orderId || ""))) {
+        order = await db.collection("orders").findOne({
+          _id: new ObjectId(proof.orderId),
+          guildId: proof.guildId,
+          channelId: proof.channelId,
+        }).catch(() => null);
+      }
+
+      let title = "BUKTI SUDAH TIDAK AKTIF";
+      let body = "Bukti ini sudah tidak berlaku. Periksa panel PESANAN untuk status terbaru.";
+      if (order?.status === "CANCELLED" || order?.paymentStatus === "cancelled") {
+        title = "PESANAN DIBATALKAN";
+        body = "Pesanan **" + clean(order.orderCode || proof.orderCode, 40) +
+          "** sudah dibatalkan. Tombol verifikasi bukti ini tidak lagi aktif.";
+      } else if (proof.status === "accepted" && ["PROSES", "DONE"].includes(order?.status) && order?.paymentStatus === "verified") {
+        title = order.status === "DONE" ? "PEMBAYARAN VALID — PESANAN SELESAI" : "BUKTI VALID — PESANAN DIPROSES";
+        body = "Bukti transfer sudah dinyatakan valid oleh <@" +
+          clean(order.reviewedBy || proof.reviewedBy || "", 30) + ">.\n" +
+          "Pesanan **" + clean(order.orderCode || proof.orderCode, 40) +
+          "** sekarang berstatus **" + clean(order.status, 30) + "**.";
+      } else if (proof.status === "rejected" || (order?.status === "ON HOLD" && order?.paymentStatus === "rejected")) {
+        title = "BUKTI TRANSFER TIDAK VALID";
+        body = "Bukti ini ditolak. Pembeli dapat mengirim ulang bukti yang benar; status pesanan tetap **ON HOLD**.";
+      }
+
+      await replacePaymentReviewNotice(client, proof, title, body);
+    } catch (error) {
+      console.error("[payment-review-terminal-reconcile]", error?.message || error);
+    }
+  }
+}
+
 async function ensurePendingPaymentNotices(client, db) {
   const proofs = await db.collection("payment_proofs").find({ status: "pending" })
     .sort({ createdAt: 1 }).limit(100).toArray();
@@ -1278,6 +1325,7 @@ async function runOrderMaintenance(client) {
   try {
     const db = getDatabase();
     await reconcilePaymentProofStatuses(db, client);
+    await reconcileTerminalPaymentReviewNotices(db, client);
     await ensurePendingPaymentNotices(client, db);
     await publishPendingVouches(client);
     const staleClosingTickets = await db.collection("tickets").find({
