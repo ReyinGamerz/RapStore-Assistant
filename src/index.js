@@ -804,7 +804,11 @@ async function handleCatalogSelection(interaction) {
         try { liveChannel = await interaction.guild.channels.fetch(activeTicket.channelId); }
         catch (error) { if (Number(error?.code) === 10003) liveChannel = null; else throw error; }
         if (liveChannel) { existing ||= activeTicket; continue; }
-        await db.collection("tickets").updateOne({ _id: activeTicket._id, status: "open" }, { $set: { status: "deleted", closedAt: new Date(), closeReason: "discord_channel_missing", cleanupAt: new Date() } });
+        const missingAt = new Date();
+        await db.collection("tickets").updateOne(
+          { _id: activeTicket._id, status: "open" },
+          { $set: { status: "deleted", closedAt: missingAt, closeReason: "discord_channel_missing", cleanupAt: missingAt, transcriptStatus: "unavailable" } },
+        );
         const missingAt = new Date();
         await db.collection("orders").updateMany(
           { guildId: interaction.guildId, channelId: activeTicket.channelId, status: "ON HOLD" },
@@ -815,8 +819,13 @@ async function handleCatalogSelection(interaction) {
           { $set: { status: "superseded", supersededAt: missingAt, supersededReason: "ticket_channel_missing", updatedAt: missingAt }, $unset: { reviewSendingAt: "" } },
         );
         await db.collection("orders").updateMany(
-          { guildId: interaction.guildId, channelId: activeTicket.channelId, status: { $in: ["PROSES", "DONE"] }, ticketClosedAt: { $exists: false } },
+          { guildId: interaction.guildId, channelId: activeTicket.channelId, status: "PROSES", ticketClosedAt: { $exists: false } },
           { $set: { ticketCloseBlockedAt: missingAt, ticketCloseBlockedReason: "channel_missing_before_archive", ticketChannelMissingAt: missingAt, transcriptStatus: "unavailable", updatedAt: missingAt }, $unset: { closeProcessingAt: "" } },
+        );
+        // Keep DONE orders eligible for their one-time vouch publication even if their channel vanished.
+        await db.collection("orders").updateMany(
+          { guildId: interaction.guildId, channelId: activeTicket.channelId, status: "DONE", ticketClosedAt: { $exists: false } },
+          { $set: { ticketChannelMissingAt: missingAt, transcriptStatus: "unavailable", updatedAt: missingAt }, $unset: { closeProcessingAt: "" } },
         );
       }
       if (existing) {
@@ -1018,8 +1027,13 @@ async function main() {
       );
       // Preserve paid/in-progress order states, but mark missing transcripts for manual review.
       await db.collection("orders").updateMany(
-        { ...orderFilter, status: { $in: ["PROSES", "DONE"] }, ticketClosedAt: { $exists: false } },
+        { ...orderFilter, status: "PROSES", ticketClosedAt: { $exists: false } },
         { $set: { ticketCloseBlockedAt: now, ticketCloseBlockedReason: "channel_missing_before_archive", ticketChannelMissingAt: now, transcriptStatus: "unavailable", updatedAt: now }, $unset: { closeProcessingAt: "" } },
+      );
+      // Do not block a DONE order before maintenance has had a chance to publish its vouch.
+      await db.collection("orders").updateMany(
+        { ...orderFilter, status: "DONE", ticketClosedAt: { $exists: false } },
+        { $set: { ticketChannelMissingAt: now, transcriptStatus: "unavailable", updatedAt: now }, $unset: { closeProcessingAt: "" } },
       );
       await db.collection("audit_logs").insertOne({
         action: "ticket.channel_deleted",
