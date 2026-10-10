@@ -236,6 +236,88 @@ export async function handleOrderInteraction(interaction, client) {
   const customId = String(interaction.customId || "");
   const db = getDatabase();
 
+  if (customId.startsWith("rapstore:vouch:")) {
+    if (!interaction.inGuild()) {
+      await replyNotice(interaction, "VOUCH TIDAK VALID", "Testimoni hanya dapat dikirim melalui tiket di server.");
+      return;
+    }
+    const parts = customId.split(":");
+    const action = parts[2];
+    const orderId = parts[3] || "";
+    if (!ObjectId.isValid(orderId)) {
+      await replyNotice(interaction, "PESANAN TIDAK VALID", "ID pesanan untuk vouch tidak valid.");
+      return;
+    }
+    const order = await db.collection("orders").findOne({ _id: new ObjectId(orderId), guildId: interaction.guildId, status: "DONE" });
+    if (!order) {
+      await replyNotice(interaction, "PESANAN BELUM SELESAI", "Tombol VOUCH hanya berlaku untuk transaksi yang sudah DONE.");
+      return;
+    }
+    if (order.buyerId !== interaction.user.id) {
+      await replyNotice(interaction, "AKSES DITOLAK", "Tombol VOUCH hanya dapat digunakan oleh pembeli transaksi ini.");
+      return;
+    }
+    const existingVouch = await db.collection("vouches").findOne({ orderId: String(order._id) });
+    if (action === "open" && interaction.isButton()) {
+      if (existingVouch) {
+        await replyNotice(interaction, "VOUCH SUDAH DICATAT", "Satu transaksi hanya dapat mengirim satu testimoni.");
+        return;
+      }
+      if (order.autoCloseAt && new Date(order.autoCloseAt).getTime() <= Date.now()) {
+        await replyNotice(interaction, "WAKTU VOUCH HABIS", "Batas pengiriman testimoni sudah lewat. Sistem akan menerbitkan vouch otomatis.");
+        return;
+      }
+      const modal = new ModalBuilder()
+        .setCustomId("rapstore:vouch:submit:" + String(order._id))
+        .setTitle("Kirim Testimoni RapStore")
+        .addComponents(
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder().setCustomId("rating").setLabel("Rating (1–5)").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(1),
+          ),
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder().setCustomId("message").setLabel("Pesan & kesan").setStyle(TextInputStyle.Paragraph).setRequired(true).setMaxLength(700),
+          ),
+        );
+      await interaction.showModal(modal);
+      return;
+    }
+    if (action === "submit" && interaction.isModalSubmit()) {
+      if (existingVouch) {
+        await replyNotice(interaction, "VOUCH SUDAH DICATAT", "Testimoni untuk transaksi ini sudah tercatat.");
+        return;
+      }
+      const rating = Number(interaction.fields.getTextInputValue("rating").trim());
+      const message = clean(interaction.fields.getTextInputValue("message"), 700);
+      if (!Number.isInteger(rating) || rating < 1 || rating > 5 || !message) {
+        await replyNotice(interaction, "TESTIMONI TIDAK VALID", "Rating harus angka 1–5 dan pesan tidak boleh kosong.");
+        return;
+      }
+      try {
+        await db.collection("vouches").insertOne({
+          orderId: String(order._id), orderCode: order.orderCode, guildId: order.guildId,
+          channelId: order.channelId, buyerId: order.buyerId, productName: order.productName || "Produk RapStore",
+          rating, message, automatic: false, status: "pending_publish", createdAt: new Date(),
+        });
+      } catch (error) {
+        if (error?.code !== 11000) throw error;
+        await replyNotice(interaction, "VOUCH SUDAH DICATAT", "Testimoni untuk transaksi ini sudah tercatat.");
+        return;
+      }
+      await publishPendingVouches(client);
+      const savedVouch = await db.collection("vouches").findOne({ orderId: String(order._id) });
+      await replyNotice(
+        interaction,
+        savedVouch?.status === "published" ? "VOUCH TERKIRIM" : "VOUCH TERSIMPAN",
+        savedVouch?.status === "published"
+          ? "Terima kasih! Testimoni lu sudah dikirim ke channel testimoni RapStore."
+          : "Testimoni tersimpan. Bot akan mencoba mengirimkannya kembali otomatis setelah channel vouch tersedia.",
+      );
+      return;
+    }
+    await replyNotice(interaction, "AKSI VOUCH TIDAK DIKENAL", "Buka tombol VOUCH pada tiket transaksi dan coba lagi.");
+    return;
+  }
+
   if (customId.startsWith("rapstore:payment:process:") || customId.startsWith("rapstore:payment:invalid:")) {
     if (!interaction.inGuild() || !staff(interaction.member)) {
       await replyNotice(interaction, "AKSES DITOLAK", "Hanya Founder/Admin yang dapat memverifikasi bukti transfer.");
@@ -285,11 +367,6 @@ export async function handleOrderInteraction(interaction, client) {
         "BUKTI TRANSFER DITERIMA",
         "Diperiksa oleh <@" + interaction.user.id + ">.\nPesanan **" + clean(order.orderCode, 40) + "** sekarang berstatus **PROSES**.",
       )));
-      const channel = await interaction.guild.channels.fetch(order.channelId).catch(() => null);
-      if (channel) await channel.send(v2(buildPanel(
-        "PEMBAYARAN TERVERIFIKASI",
-        "Bukti transfer diterima oleh Founder/Admin. Pesanan **" + clean(order.orderCode, 40) + "** sekarang berstatus **PROSES**.",
-      )));
       await db.collection("audit_logs").insertOne({
         action: "payment.verified", actorId: interaction.user.id, guildId: interaction.guildId,
         details: { orderId: String(order._id), proofId: String(proof._id), orderCode: order.orderCode }, createdAt: new Date(),
@@ -317,11 +394,6 @@ export async function handleOrderInteraction(interaction, client) {
     await interaction.update(v2(buildPanel(
       "BUKTI TRANSFER TIDAK VALID",
       "Diperiksa oleh <@" + interaction.user.id + ">.\nPengguna telah diminta mengirim ulang bukti transfer.",
-    )));
-    const channel = await interaction.guild.channels.fetch(order.channelId).catch(() => null);
-    if (channel) await channel.send(v2(buildPanel(
-      "BUKTI TRANSFER TIDAK VALID",
-      "<@" + order.buyerId + ">, bukti transfer sebelumnya tidak dapat diverifikasi. Silakan kirim ulang bukti yang jelas dan sesuai nominal. Status pesanan tetap **ON HOLD**.",
     )));
     await db.collection("audit_logs").insertOne({
       action: "payment.rejected", actorId: interaction.user.id, guildId: interaction.guildId,
@@ -375,20 +447,23 @@ export async function handleOrderInteraction(interaction, client) {
       await interaction.update(v2(buildPanel("PESANAN SUDAH DIPROSES", "Status pesanan sudah berubah.")));
       return;
     }
-    await db.collection("tickets").updateOne(
-      { guildId: interaction.guildId, channelId: interaction.channelId, status: "open" },
-      { $set: { status: "closed", closedAt: new Date(), closedBy: interaction.user.id, closeReason: "order_cancelled" } },
-    );
     const updated = await db.collection("orders").findOne({ _id: order._id });
-    await interaction.update(v2(buildPanel("PESANAN DIBATALKAN", "Status pesanan **" + clean(order.orderCode, 40) + "** berubah menjadi **CANCELLED**. Tiket sedang ditutup.")));
+    await interaction.update(v2(buildPanel("PESANAN DIBATALKAN", "Status pesanan **" + clean(order.orderCode, 40) + "** berubah menjadi **CANCELLED**. Tiket akan diarsipkan sebagai transcript.")));
     const channel = interaction.channel;
     if (order.orderMessageId) {
       const message = await channel.messages.fetch(order.orderMessageId).catch(() => null);
       if (message) await message.edit(await buildOrderPanel(updated)).catch(() => {});
     }
-    await channel.permissionOverwrites.edit(order.buyerId, { ViewChannel: false, SendMessages: false }).catch(() => {});
-    if (!channel.name.startsWith("closed-")) await channel.setName(("closed-" + channel.name).slice(0, 100)).catch(() => {});
-    await channel.send(v2(buildPanel("PESANAN DIBATALKAN", "Pesanan dibatalkan oleh <@" + interaction.user.id + "> dan tiket telah ditutup.")));
+    await channel.send(v2(buildPanel("PESANAN DIBATALKAN", "Pesanan dibatalkan oleh <@" + interaction.user.id + ">. Transcript akan disimpan sebelum channel dihapus.")));
+    const ticket = await db.collection("tickets").findOne({ guildId: interaction.guildId, channelId: interaction.channelId, status: "open" });
+    if (ticket) {
+      try {
+        await archiveAndDeleteTicket({ channel, ticket, client, closedBy: interaction.user.id, reason: "order_cancelled" });
+      } catch (error) {
+        console.error("[order-cancel-archive]", error?.message || error);
+        await channel.send(v2(buildPanel("TRANSCRIPT BELUM TERSIMPAN", "Channel tidak dihapus agar isi tiket tidak hilang. Periksa TRANSCRIPT_CHANNEL_ID dan izin bot."))).catch(() => {});
+      }
+    }
     await db.collection("audit_logs").insertOne({
       action: "order.cancelled", actorId: interaction.user.id, guildId: interaction.guildId,
       details: { orderId: String(order._id), orderCode: order.orderCode, channelId: order.channelId }, createdAt: new Date(),
@@ -404,20 +479,11 @@ export async function handleOrderInteraction(interaction, client) {
       await replyNotice(interaction, "STATUS TIDAK SESUAI", "Pesanan hanya bisa ditandai DONE dari status PROSES.");
       return;
     }
-    const completed = await db.collection("orders").updateOne({ _id: order._id, status: "PROSES" }, {
-      $set: { status: "DONE", completedAt: new Date(), completedBy: interaction.user.id, updatedAt: new Date() },
-    });
-    if (!completed.modifiedCount) {
+    await interaction.deferUpdate();
+    const updated = await markOrderDone(order, interaction.user.id, interaction.channel, client);
+    if (!updated) {
       await replyNotice(interaction, "STATUS BERUBAH", "Pesanan tidak lagi berstatus PROSES. Muat ulang panel dan coba lagi.");
-      return;
     }
-    const updated = await db.collection("orders").findOne({ _id: order._id });
-    await interaction.update(await buildOrderPanel(updated));
-    await interaction.channel.send(v2(buildPanel("PESANAN SELESAI", "Pesanan **" + clean(order.orderCode, 40) + "** telah ditandai **DONE** oleh Founder/Admin.")));
-    await db.collection("audit_logs").insertOne({
-      action: "order.completed", actorId: interaction.user.id, guildId: interaction.guildId,
-      details: { orderId: String(order._id), orderCode: order.orderCode }, createdAt: new Date(),
-    }).catch(() => {});
     return;
   }
 
@@ -546,8 +612,35 @@ export async function handleOrderInteraction(interaction, client) {
 }
 
 export async function handleOrderMessage(message, client) {
-  if (!message?.guild || message.author?.bot || !message.channel || !message.attachments?.size) return;
+  if (!message?.guild || message.author?.bot || !message.channel) return;
   const db = getDatabase();
+  if (String(message.content || "").trim().toLowerCase() === "!done") {
+    const member = message.member || await message.guild.members.fetch(message.author.id).catch(() => null);
+    if (!staff(member)) {
+      await message.channel.send(v2(buildPanel("AKSES DITOLAK", "Command !done hanya bisa digunakan Founder/Admin."))).catch(() => {});
+      return;
+    }
+    const ticket = await db.collection("tickets").findOne({
+      guildId: message.guild.id, channelId: message.channel.id, status: "open", type: "order_now",
+    });
+    if (!ticket) {
+      await message.channel.send(v2(buildPanel("TIKET ORDER TIDAK DITEMUKAN", "Command !done hanya berlaku di tiket order yang masih terbuka."))).catch(() => {});
+      return;
+    }
+    const order = await db.collection("orders").findOne({
+      guildId: message.guild.id, channelId: message.channel.id, status: "PROSES",
+    });
+    if (!order) {
+      await message.channel.send(v2(buildPanel("STATUS TIDAK SESUAI", "Pesanan harus berstatus PROSES sebelum bisa ditandai DONE."))).catch(() => {});
+      return;
+    }
+    const updated = await markOrderDone(order, message.author.id, message.channel, client);
+    if (!updated) {
+      await message.channel.send(v2(buildPanel("STATUS BERUBAH", "Pesanan tidak lagi berstatus PROSES. Periksa panel pesanan."))).catch(() => {});
+    }
+    return;
+  }
+  if (!message.attachments?.size) return;
   const ticket = await db.collection("tickets").findOne({
     guildId: message.guild.id, channelId: message.channel.id, status: "open", type: "order_now",
   });
