@@ -10,6 +10,8 @@ import {
   ModalBuilder,
   PermissionFlagsBits,
   StringSelectMenuBuilder,
+  SeparatorBuilder,
+  TextDisplayBuilder,
   TextInputBuilder,
   TextInputStyle,
 } from "discord.js";
@@ -179,59 +181,141 @@ async function handleFounderPanelModal(interaction) {
   }
   if(parts[2]==="stock"){const {ObjectId}=await import("mongodb");const id=parts[3];const product=ObjectId.isValid(id)?await db.collection("products").findOne({_id:new ObjectId(id),active:true}):null;if(!product){await interaction.reply(v2Payload({content:"Produk aktif tidak ditemukan.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;}const items=[...new Set(interaction.fields.getTextInputValue("items").split(/\r?\n/).map(x=>x.trim()).filter(Boolean))];if(!items.length||items.length>100||items.some(x=>x.length>1000)){await interaction.reply(v2Payload({content:"Masukkan 1–100 item unik, maksimal 1000 karakter per item.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;}try{await db.collection("stock_items").insertMany(items.map(code=>({productId:String(product._id),code,status:"available",createdAt:new Date(),createdBy:interaction.user.id})),{ordered:true});}catch(error){if(error?.code===11000){await interaction.reply(v2Payload({content:"Item duplikat terdeteksi; sebagian item mungkin sudah masuk. Periksa stok sebelum mencoba ulang.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;}throw error;}await audit("stock.added",interaction,{productId:id,count:items.length,source:"panel"});await interaction.reply(v2Payload({content:"Berhasil menambahkan "+items.length+" item stok.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));}
 }
+async function catalogData(db) {
+  const products = db.collection("products");
+  const categories = await products.distinct("category", { active: true });
+  const legacyCount = await products.countDocuments({ active: true, $or: [{ category: { $exists: false } }, { category: null }, { category: "" }] });
+  const normalized = [...new Set([...categories.map(category => safeText(category || "Umum", 80)), ...(legacyCount ? ["Umum"] : [])].filter(Boolean))].sort();
+  return { categories: normalized, products };
+}
+
+async function renderCatalogPanel(interaction, selectedCategory = "", selectedProductId = "") {
+  const db = getDatabase();
+  const { categories, products } = await catalogData(db);
+  if (!categories.length) {
+    const empty = buildPanel("🛍️ RAPSTORE - CATALOG", "Katalog belum memiliki produk aktif. Staff bisa menambahkan produk terlebih dahulu.");
+    await interaction.editReply({ flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral, components: [empty] });
+    return;
+  }
+
+  const category = categories.includes(selectedCategory) ? selectedCategory : "";
+  const filter = category
+    ? (category === "Umum"
+      ? { active: true, $or: [{ category: "Umum" }, { category: { $exists: false } }, { category: null }, { category: "" }] }
+      : { active: true, category })
+    : { active: true };
+  const list = await products.find(filter).sort({ name: 1 }).limit(25).toArray();
+  let selectedProduct = null;
+  if (selectedProductId) {
+    const { ObjectId } = await import("mongodb");
+    if (ObjectId.isValid(selectedProductId)) {
+      selectedProduct = list.find(p => String(p._id) === selectedProductId)
+        || await products.findOne({ _id: new ObjectId(selectedProductId), active: true });
+    }
+  }
+
+  const lines = ["**Kategori:** " + (category || "Semua kategori")];
+  if (selectedProduct) {
+    const stock = await db.collection("stock_items").countDocuments({ productId: String(selectedProduct._id), status: "available" });
+    const retail = Number(selectedProduct.price || 0);
+    const reseller = Number.isSafeInteger(selectedProduct.resellerPrice) && selectedProduct.resellerPrice > 0 ? selectedProduct.resellerPrice : retail;
+    lines.push("### " + safeText(selectedProduct.name, 100));
+    if (selectedProduct.description) lines.push(safeText(selectedProduct.description, 500));
+    lines.push("Retail: **" + formatPrice(retail) + "**　 Reseller: **" + formatPrice(reseller) + "**");
+    lines.push("Stok: " + (stock > 0 ? "🟢 Tersedia" : "🔴 Habis") + " (" + stock + ")");
+    lines.push("Harga reseller berlaku otomatis berdasarkan role Discord.");
+  } else if (!list.length) {
+    lines.push("Belum ada produk aktif di kategori ini.");
+  } else {
+    for (const product of list) {
+      const stock = await db.collection("stock_items").countDocuments({ productId: String(product._id), status: "available" });
+      const retail = Number(product.price || 0);
+      const reseller = Number.isSafeInteger(product.resellerPrice) && product.resellerPrice > 0 ? product.resellerPrice : retail;
+      lines.push("### " + safeText(product.name, 100));
+      if (product.description) lines.push(safeText(product.description, 250));
+      lines.push("Retail: **" + formatPrice(retail) + "**　 Reseller: **" + formatPrice(reseller) + "**");
+      lines.push("Stok: " + (stock > 0 ? "🟢 Tersedia" : "🔴 Habis") + " (" + stock + ")");
+    }
+  }
+
+  const panel = buildPanel("🛍️ RAPSTORE - CATALOG");
+  panel.addSeparatorComponents(new SeparatorBuilder());
+  panel.addTextDisplayComponents(new TextDisplayBuilder().setContent(lines.join("\n").slice(0, 3900)));
+  panel.addSeparatorComponents(new SeparatorBuilder());
+
+  const categoryMenu = new StringSelectMenuBuilder()
+    .setCustomId("rapstore:catalog:category").setPlaceholder("Pilih Kategori")
+    .setMinValues(1).setMaxValues(1)
+    .addOptions(categories.slice(0, 25).map(c => ({ label: c.slice(0, 100), value: c, description: "Tampilkan produk kategori ini" })));
+  const productMenu = new StringSelectMenuBuilder()
+    .setCustomId("rapstore:catalog:product").setPlaceholder("Pilih Produk")
+    .setMinValues(1).setMaxValues(1);
+  const productOptions = list.slice(0, 25).map(p => ({
+    label: safeText(p.name, 100), value: String(p._id),
+    description: (formatPrice(p.price) + " • " + safeText(p.category || "Umum", 30)).slice(0, 100),
+  }));
+  if (productOptions.length) productMenu.addOptions(productOptions);
+  else productMenu.addOptions([{ label: "Belum ada produk", value: "none", description: "Kategori ini belum memiliki produk" }]).setDisabled(true);
+
+  const ticketMenu = new StringSelectMenuBuilder()
+    .setCustomId("rapstore:catalog:ticket").setPlaceholder("Pilih Tujuan Tiket")
+    .setMinValues(1).setMaxValues(1)
+    .addOptions([{ label: "Tanya Tanya Produk", value: "product_question", description: "Buat tiket privat untuk bertanya tentang produk" }]);
+
+  panel.addActionRowComponents(new ActionRowBuilder().addComponents(categoryMenu));
+  panel.addActionRowComponents(new ActionRowBuilder().addComponents(productMenu));
+  panel.addActionRowComponents(new ActionRowBuilder().addComponents(ticketMenu));
+  await interaction.editReply({ flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral, components: [panel] });
+}
+
 async function handleCatalogSelection(interaction) {
   await interaction.deferUpdate();
   const db = getDatabase();
   if (interaction.customId === "rapstore:catalog:category") {
-    const category = safeText(interaction.values[0], 80);
-    const categoryFilter = category === "Umum" ? { active: true, $or: [{ category: "Umum" }, { category: { $exists: false } }, { category: null }, { category: "" }] } : { active: true, category };
-    const list = await db.collection("products").find(categoryFilter).sort({ name: 1 }).limit(25).toArray();
-    if (!list.length) {
-      await interaction.editReply(v2EditPayload("Kategori ini belum memiliki produk aktif. Jalankan /catalog untuk mulai lagi."));
-      return;
-    }
-    const menu = new StringSelectMenuBuilder().setCustomId("rapstore:catalog:product")
-      .setPlaceholder("Pilih produk").setMinValues(1).setMaxValues(1)
-      .addOptions(await Promise.all(list.map(async product => {
-        const stock = await db.collection("stock_items").countDocuments({ productId: String(product._id), status: "available" });
-        return { label: safeText(product.name, 100), value: String(product._id), description: (formatPrice(product.price) + " • stok " + stock).slice(0, 100) };
-      })));
-    const panel = buildPanel("🛍️ " + category, "Pilih produk untuk melihat harga dan stok.");
-    panel.addActionRowComponents(new ActionRowBuilder().addComponents(menu));
-    await interaction.editReply({ flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral, components: [panel] });
+    await renderCatalogPanel(interaction, safeText(interaction.values[0], 80));
     return;
   }
   if (interaction.customId === "rapstore:catalog:product") {
-    const { ObjectId } = await import("mongodb");
     const id = interaction.values[0];
-    if (!ObjectId.isValid(id)) {
-      await interaction.editReply(v2EditPayload("ID produk tidak valid. Jalankan /catalog lagi."));
-      return;
-    }
+    if (id === "none") return;
+    const { ObjectId } = await import("mongodb");
+    if (!ObjectId.isValid(id)) return void await renderCatalogPanel(interaction);
     const product = await db.collection("products").findOne({ _id: new ObjectId(id), active: true });
-    if (!product) {
-      await interaction.editReply(v2EditPayload("Produk tidak ditemukan atau sudah nonaktif. Jalankan /catalog lagi."));
+    if (!product) return void await renderCatalogPanel(interaction);
+    await renderCatalogPanel(interaction, safeText(product.category || "Umum", 80), id);
+    return;
+  }
+  if (interaction.customId === "rapstore:catalog:ticket") {
+    if (!interaction.inGuild()) {
+      await interaction.followUp(v2Payload({ content: "Tiket hanya bisa dibuat di server Discord.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
       return;
     }
-    const stock = await db.collection("stock_items").countDocuments({ productId: String(product._id), status: "available" });
-    const retail = Number(product.price);
-    const reseller = Number.isSafeInteger(product.resellerPrice) && product.resellerPrice > 0 ? product.resellerPrice : retail;
-    const selectedPrice = priceForMember(product, interaction.member);
-    const tierLabel = hasResellerRole(interaction.member) ? "HARGA RESELLER" : "HARGA RETAIL";
-    const availabilityLabel = stock > 0 ? "🟢 Tersedia" : "🔴 Stok habis";
-    const panel = buildPanel("🛍️ RAPSTORE  /  DETAIL PRODUK", "**" + safeText(product.name, 100) + "**", [
-      safeText(product.description || "Produk digital berkualitas dari RapStore.", 1000),
-      "📂 **Kategori**\n" + safeText(product.category || "Umum", 80),
-      "💳 **Harga produk**\n" + tierLabel + ": **" + formatPrice(selectedPrice) + "**\nRetail: " + formatPrice(retail) + "  •  Reseller: " + formatPrice(reseller),
-      "📦 **Ketersediaan**\n" + availabilityLabel + "  ·  Stok: **" + stock + "**",
-      "🔐 Harga reseller otomatis berlaku jika akun memiliki role Reseller.",
-    ]);
-    const rows = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId("rapstore:catalog:order:" + String(product._id)).setLabel("Order Sekarang").setStyle(ButtonStyle.Success).setDisabled(stock < 1),
-      new ButtonBuilder().setCustomId("rapstore:catalog:back").setLabel("Pilih Produk Lain").setStyle(ButtonStyle.Secondary)
-    );
-    panel.addActionRowComponents(rows);
-    await interaction.editReply({ flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral, components: [panel] });
+    const existing = await db.collection("tickets").findOne({ guildId: interaction.guildId, buyerId: interaction.user.id, type: "product_question", status: "open" });
+    if (existing) {
+      await interaction.followUp(v2Payload({ content: "Lu sudah punya tiket pertanyaan yang masih terbuka: <#" + existing.channelId + ">.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
+      return;
+    }
+    const channel = await interaction.guild.channels.create({
+      name: "tanya-produk-" + (interaction.user.username.toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 12) || "buyer"),
+      type: ChannelType.GuildText,
+      parent: config.ids.supportCategory || undefined,
+      topic: "RapStore product question; buyer " + interaction.user.id,
+      permissionOverwrites: [
+        { id: interaction.guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+        { id: interaction.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles] },
+        { id: config.ids.founderRole, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+        { id: config.ids.adminRole, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+        { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels] },
+      ],
+    });
+    try {
+      await db.collection("tickets").insertOne({ guildId: interaction.guildId, buyerId: interaction.user.id, channelId: channel.id, type: "product_question", status: "open", createdAt: new Date() });
+      await channel.send(v2SendPayload("**RAPSTORE — TANYA PRODUK**\nHalo <@" + interaction.user.id + ">! Silakan tulis pertanyaan produk lu di sini. Admin/Founder akan membantu.\n\nJangan kirim password atau data sensitif."));
+      await interaction.followUp(v2Payload({ content: "✓ Tiket pertanyaan produk berhasil dibuat: <#" + channel.id + ">.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
+    } catch (error) {
+      await channel.delete("Failed to initialize product question ticket").catch(() => {});
+      throw error;
+    }
   }
 }
 function formatPrice(value) {
@@ -239,28 +323,6 @@ function formatPrice(value) {
 }
 
 async function handleInteraction(interaction) {
-  if (interaction.isButton() && interaction.customId.startsWith("rapstore:catalog:")) {
-    if (interaction.customId === "rapstore:catalog:back") {
-      await interaction.deferUpdate();
-      const db = getDatabase();
-      const products = db.collection("products");
-      const categories = await products.distinct("category", { active: true });
-      const legacyCount = await products.countDocuments({ active: true, $or: [{ category: { $exists: false } }, { category: null }, { category: "" }] });
-      const normalized = [...new Set([...categories.map(category => safeText(category || "Umum", 80)), ...(legacyCount ? ["Umum"] : [])].filter(Boolean))].sort();
-      if (!normalized.length) return void await interaction.editReply(v2EditPayload("Katalog belum memiliki produk aktif."));
-      const menu = new StringSelectMenuBuilder().setCustomId("rapstore:catalog:category").setPlaceholder("Pilih kategori").setMinValues(1).setMaxValues(1)
-        .addOptions(normalized.slice(0, 25).map(category => ({ label: category.slice(0, 100), value: category, description: "Lihat produk kategori ini" })));
-      const panel = buildPanel("🛍️ RAPSTORE CATALOG", "Pilih kategori untuk melihat daftar produk. Harga otomatis mengikuti role Discord.");
-      panel.addActionRowComponents(new ActionRowBuilder().addComponents(menu));
-      await interaction.editReply({ flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral, components: [panel] });
-      return;
-    }
-    if (interaction.customId.startsWith("rapstore:catalog:order:")) {
-      const productId = interaction.customId.split(":").pop();
-      await interaction.reply(v2Payload({ flags: EPHEMERAL | MessageFlags.IsComponentsV2, content: "Untuk menjaga alur stok dan pembayaran tetap aman, jalankan **/order_create** lalu masukkan ID produk berikut:\n`" + productId + "`\nPilih jumlah yang diinginkan. Harga retail/reseller akan dihitung otomatis berdasarkan role Discord." }));
-      return;
-    }
-  }
   if (interaction.isButton() && interaction.customId.startsWith("rapstore:panel:")) { await handleFounderPanelButton(interaction); return; }
   if (interaction.isStringSelectMenu() && interaction.customId.startsWith("rapstore:panelchoose:")) { await handleFounderPanelSelect(interaction); return; }
   if (interaction.isModalSubmit() && interaction.customId.startsWith("rapstore:panelmodal:")) { await handleFounderPanelModal(interaction); return; }
@@ -292,19 +354,7 @@ async function handleInteraction(interaction) {
   if (interaction.commandName === "panel") { await showFounderPanel(interaction); return; }
   if (interaction.commandName === "catalog") {
     await interaction.deferReply({ flags: EPHEMERAL | MessageFlags.IsComponentsV2 });
-    const categories = await products.distinct("category", { active: true });
-    const legacyCount = await products.countDocuments({ active: true, $or: [{ category: { $exists: false } }, { category: null }, { category: "" }] });
-    const normalized = [...new Set([...categories.map(category => safeText(category || "Umum", 80)), ...(legacyCount ? ["Umum"] : [])].filter(Boolean))].sort();
-    if (!normalized.length) {
-      await interaction.editReply(v2EditPayload("Katalog masih kosong. Staff bisa menambah produk dengan /product_add."));
-      return;
-    }
-    const menu = new StringSelectMenuBuilder().setCustomId("rapstore:catalog:category")
-      .setPlaceholder("Pilih kategori").setMinValues(1).setMaxValues(1)
-      .addOptions(normalized.slice(0, 25).map(category => ({ label: category.slice(0, 100), value: category, description: "Lihat produk kategori ini" })));
-    const panel = buildPanel("🛒 RAPSTORE CATALOG", "Pilih kategori untuk melihat produk. Harga reseller berlaku otomatis berdasarkan role Discord.");
-    panel.addActionRowComponents(new ActionRowBuilder().addComponents(menu));
-    await interaction.editReply({ flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral, components: [panel] });
+    await renderCatalogPanel(interaction);
     return;
   }
   if (interaction.commandName === "product_add") {
