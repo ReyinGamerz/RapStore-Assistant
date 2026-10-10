@@ -756,29 +756,26 @@ async function handleCatalogSelection(interaction) {
 
   if (interaction.customId === "rapstore:catalog:category") {
     const category = safeText(interaction.values[0], 80);
-    if (fromPublicCatalog) {
-      await interaction.deferReply({ flags: EPHEMERAL | MessageFlags.IsComponentsV2 });
-    } else {
-      await interaction.deferUpdate();
-    }
+    // A public catalog selection must update the existing public message.
+    // deferReply() would create a new ephemeral response and leave the public
+    // catalog unchanged, which is not the intended shared-catalog behavior.
+    await interaction.deferUpdate();
     await interaction.editReply(await buildCatalogPayload(category, ""));
     return;
   }
 
   if (interaction.customId === "rapstore:catalog:product") {
     const id = String(interaction.values[0] || "");
-    if (fromPublicCatalog) {
-      await interaction.deferReply({ flags: EPHEMERAL | MessageFlags.IsComponentsV2 });
-    } else {
-      await interaction.deferUpdate();
-    }
+    // Acknowledge the select on the original catalog message. Subsequent
+    // editReply() calls update that same message rather than creating a new
+    // ephemeral catalog copy.
+    await interaction.deferUpdate();
     if (id === "none") {
       const payload = v2Payload({
         content: "Pilih kategori terlebih dahulu, lalu pilih produk.",
         flags: EPHEMERAL | MessageFlags.IsComponentsV2,
       });
-      if (fromPublicCatalog) await interaction.editReply(payload);
-      else await interaction.followUp(payload);
+      await interaction.followUp(payload);
       return;
     }
     if (!ObjectId.isValid(id)) {
@@ -786,8 +783,7 @@ async function handleCatalogSelection(interaction) {
         content: "Produk tidak valid. Silakan pilih ulang.",
         flags: EPHEMERAL | MessageFlags.IsComponentsV2,
       });
-      if (fromPublicCatalog) await interaction.editReply(payload);
-      else await interaction.followUp(payload);
+      await interaction.followUp(payload);
       return;
     }
     const product = await db.collection("products").findOne({ _id: new ObjectId(id), active: true });
@@ -796,8 +792,7 @@ async function handleCatalogSelection(interaction) {
         content: "Produk tidak ditemukan atau sudah tidak aktif. Silakan pilih ulang.",
         flags: EPHEMERAL | MessageFlags.IsComponentsV2,
       });
-      if (fromPublicCatalog) await interaction.editReply(payload);
-      else await interaction.followUp(payload);
+      await interaction.followUp(payload);
       return;
     }
     const category = safeText(product.category || "Umum", 80);
