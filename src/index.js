@@ -55,7 +55,7 @@ async function handleFounderPanelButton(interaction) {
   const db = getDatabase();
   if (action === "list") {
     const list = await db.collection("products").find({}).sort({ name: 1 }).limit(15).toArray();
-    const lines = await Promise.all(list.map(async p => { const stock = await db.collection("stock_items").countDocuments({ productId: String(p._id), status: "available" }); return "• " + safeText(p.name, 80) + " [" + (p.active ? "aktif" : "nonaktif") + "]\nID: " + p._id + "\nKategori: " + safeText(p.category || "Umum",80) + " • Harga " + formatPrice(p.price); }));
+    const lines = list.map(p => "• " + safeText(p.name, 80) + " [" + (p.active ? "aktif" : "nonaktif") + "]\nID: " + p._id + "\nKategori: " + safeText(p.category || "Umum",80) + " • Harga " + formatPrice(p.price));
     await interaction.reply(v2Payload({ content: lines.join("\n\n").slice(0,3800) || "Belum ada produk.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 })); return;
   }
   if (action === "edit") {
@@ -77,7 +77,7 @@ async function handleFounderPanelSelect(interaction) {
     for(const [cid,label,style,required,max,value] of specs) modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId(cid).setLabel(label).setStyle(style).setRequired(required).setMaxLength(max).setValue(String(value).slice(0,max))));
     await interaction.showModal(modal); return;
   }
-  const modal=new ModalBuilder().setCustomId("rapstore:panelmodal:stock:"+id).setTitle("Tambah Stok"); modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("items").setLabel("Satu item per baris (maks 3500 karakter)").setStyle(TextInputStyle.Paragraph).setRequired(true).setMaxLength(3500))); await interaction.showModal(modal);
+  await interaction.reply(v2Payload({content:"Aksi panel tidak dikenal.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
 }
 async function handleFounderPanelModal(interaction) {
   if (!interaction.inGuild() || !hasStaffRole(interaction.member)) { await interaction.reply(v2Payload({content:"Akses ditolak.",flags:EPHEMERAL|MessageFlags.IsComponentsV2})); return; }
