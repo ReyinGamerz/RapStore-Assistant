@@ -12,6 +12,8 @@ import { buildMessage, buildComponentsOnly, buildPanel } from "./ui.js";
 let client;
 let shuttingDown = false;
 const EPHEMERAL = MessageFlags.Ephemeral;
+const productPickerCache = new Map();
+const categoryPickerCache = new Map();
 
 function v2Payload(payload) {
   const flags = payload?.flags ?? 0;
@@ -31,7 +33,7 @@ function safeText(value, max = 500) {
   return String(value ?? "").replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, max);
 }
 function buildCategoryModal(action, current = null) {
-  const reference = current ? (current._id ? String(current._id) : encodeCategory(current.name)) : "";
+  const reference = current ? (current._id ? "id-" + String(current._id) : "name-" + encodeCategory(current.name)) : "";
   const modal=new ModalBuilder().setCustomId("rapstore:panelmodal:category:"+action+(current?":"+reference:"")).setTitle(action==="add"?"Tambah Kategori":"Edit Kategori");
   const name=new TextInputBuilder().setCustomId("nama_kategori").setLabel("Nama kategori").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(80);
   if(current?.name) name.setValue(current.name);
@@ -192,6 +194,8 @@ async function showFounderPanel(interaction) {
 async function showCategoryManagePicker(interaction, mode) {
   await interaction.deferReply({ flags: EPHEMERAL | MessageFlags.IsComponentsV2 });
   const categories = await getProductCategories();
+  for (const category of categories) categoryPickerCache.set(interaction.user.id + ":" + mode + ":" + encodeCategory(category.name), category);
+  while (categoryPickerCache.size > 500) categoryPickerCache.delete(categoryPickerCache.keys().next().value);
   const options = categories.slice(0,25).map(category => {
     const display = categoryDisplay(category);
     const option = { label: display.name.slice(0,100), value: encodeCategory(category.name), description: "Kategori: " + display.name };
@@ -215,6 +219,8 @@ async function showProductPicker(interaction, mode) {
     await interaction.editReply(v2Payload({content:"Belum ada produk.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
     return;
   }
+  for (const product of products) productPickerCache.set(interaction.user.id + ":" + String(product._id), { product, createdAt: Date.now() });
+  while (productPickerCache.size > 500) productPickerCache.delete(productPickerCache.keys().next().value);
   const menu = new StringSelectMenuBuilder().setCustomId("rapstore:panelchoose:" + mode).setPlaceholder("Pilih produk").setMinValues(1).setMaxValues(1)
     .addOptions(products.map(p => {
       const option = {label:safeText(p.name,100),value:String(p._id),description:(safeText(p.category||"Umum",80)+" • "+formatPrice(p.price)).slice(0,100)};
@@ -300,19 +306,18 @@ async function handleFounderPanelSelect(interaction) {
   const mode = parts[2];
   if (mode === "addcategory") {
     const chosen = decodeCategory(interaction.values[0]);
-    const canonical = await findCanonicalCategory(chosen);
-    if (!canonical) {
-      await interaction.reply(v2Payload({content:"Kategori tidak ditemukan. Pilih ulang dari daftar kategori.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
+    if (!chosen) {
+      await interaction.reply(v2Payload({content:"Kategori tidak valid. Pilih ulang dari daftar kategori.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
       return;
     }
-    await interaction.showModal(buildProductModal("add", canonical));
+    await interaction.showModal(buildProductModal("add", chosen));
     return;
   }
   if (mode === "editcategorymanage") {
     const name = decodeCategory(interaction.values[0]);
-    const category = (await getProductCategories()).find(item => item.name === name);
-    const current = await ensureCategoryRecord(name, category?.emoji || "");
-    await interaction.showModal(buildCategoryModal("edit",{_id:current._id,name:current.name,emoji:current.emoji||""}));
+    const cached = categoryPickerCache.get(interaction.user.id + ":" + mode + ":" + interaction.values[0]);
+    const category = cached || (await getProductCategories()).find(item => item.name === name);
+    await interaction.showModal(buildCategoryModal("edit",{name,emoji:category?.emoji||""}));
     return;
   }
   if (mode === "deletecategorymanage") {
@@ -344,7 +349,9 @@ async function handleFounderPanelSelect(interaction) {
       await interaction.reply(v2Payload({content:"ID produk tidak valid.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
       return;
     }
-    const product = await getDatabase().collection("products").findOne({_id:new ObjectId(id)});
+    const cached = productPickerCache.get(interaction.user.id + ":" + id);
+    let product = cached && Date.now() - cached.createdAt < 5 * 60 * 1000 ? cached.product : null;
+    if (!product) product = await getDatabase().collection("products").findOne({_id:new ObjectId(id)});
     if (!product) {
       await interaction.reply(v2Payload({content:"Produk tidak ditemukan.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
       return;
@@ -407,10 +414,13 @@ async function handleFounderPanelModal(interaction) {
 
     const reference = parts[4] || "";
     const {ObjectId} = await import("mongodb");
-    const oldRecord = ObjectId.isValid(reference)
-      ? await collection.findOne({_id:new ObjectId(reference)})
-      : await collection.findOne({name:decodeCategory(reference)});
-    const oldName = oldRecord?.name || (ObjectId.isValid(reference) ? "" : decodeCategory(reference));
+    const isIdReference = reference.startsWith("id-") || ObjectId.isValid(reference);
+    const idReference = reference.startsWith("id-") ? reference.slice(3) : reference;
+    const encodedName = reference.startsWith("name-") ? reference.slice(5) : reference;
+    const oldRecord = isIdReference && ObjectId.isValid(idReference)
+      ? await collection.findOne({_id:new ObjectId(idReference)})
+      : await collection.findOne({name:decodeCategory(encodedName)});
+    const oldName = oldRecord?.name || (isIdReference ? "" : decodeCategory(encodedName));
     if (!oldName) {
       await interaction.editReply(v2Payload({content:"Kategori lama tidak ditemukan. Buka Edit Kategori lagi.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
       return;
