@@ -30,7 +30,16 @@ async function audit(action, interaction, details = {}) {
 function safeText(value, max = 500) {
   return String(value ?? "").replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, max);
 }
-function buildCategoryModal(action, current = null) {\n  const modal=new ModalBuilder().setCustomId("rapstore:panelmodal:category:"+action+(current?":"+encodeCategory(current.name):"")).setTitle(action==="add"?"Tambah Kategori":"Edit Kategori");\n  const name=new TextInputBuilder().setCustomId("nama_kategori").setLabel("Nama kategori").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(80);\n  if(current?.name) name.setValue(current.name);\n  const emoji=new TextInputBuilder().setCustomId("emoji_kategori").setLabel("Emoji kategori (opsional)").setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(100);\n  if(current?.emoji) emoji.setValue(current.emoji);\n  modal.addComponents(new ActionRowBuilder().addComponents(name),new ActionRowBuilder().addComponents(emoji));\n  return modal;\n}\nasync function getProductCategories() {
+function buildCategoryModal(action, current = null) {
+  const modal=new ModalBuilder().setCustomId("rapstore:panelmodal:category:"+action+(current?":"+encodeCategory(current.name):"")).setTitle(action==="add"?"Tambah Kategori":"Edit Kategori");
+  const name=new TextInputBuilder().setCustomId("nama_kategori").setLabel("Nama kategori").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(80);
+  if(current?.name) name.setValue(current.name);
+  const emoji=new TextInputBuilder().setCustomId("emoji_kategori").setLabel("Emoji kategori (opsional)").setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(100);
+  if(current?.emoji) emoji.setValue(current.emoji);
+  modal.addComponents(new ActionRowBuilder().addComponents(name),new ActionRowBuilder().addComponents(emoji));
+  return modal;
+}
+async function getProductCategories() {
   const [saved, values] = await Promise.all([
     getDatabase().collection("categories").find({}).sort({name:1}).toArray(),
     getDatabase().collection("products").distinct("category")
@@ -125,8 +134,13 @@ async function handleFounderPanelSelect(interaction) {
   const parts=interaction.customId.split(":");
   const mode=parts[2];
   if (mode === "addcategory") {
-    const chosen=interaction.values[0];
-    await interaction.showModal(buildProductModal("add",chosen==="__new__"?"":decodeCategory(chosen),null,chosen==="__new__")); return;
+    const chosen=decodeCategory(interaction.values[0]);
+    await interaction.showModal(buildProductModal("add",chosen)); return;
+  }
+  if (mode === "editcategorymanage") {
+    const name=decodeCategory(interaction.values[0]);
+    const current=await getDatabase().collection("categories").findOne({name});
+    await interaction.showModal(buildCategoryModal("edit",{name,emoji:current?.emoji||""})); return;
   }
   const {ObjectId}=await import("mongodb");
   if (mode === "editproduct") {
