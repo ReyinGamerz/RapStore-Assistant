@@ -35,6 +35,6 @@ export const config = {
     r2AccessKeyId: optionalId("R2_ACCESS_KEY_ID"),
     r2SecretAccessKey: optionalId("R2_SECRET_ACCESS_KEY"),
     r2BucketName: optionalId("R2_BUCKET_NAME"),
-    r2PublicBaseUrl: optionalId("R2_PUBLIC_BASE_URL").replace(/\\/$/, ""),
+    r2PublicBaseUrl: optionalId("R2_PUBLIC_BASE_URL").replace(new RegExp(String.fromCharCode(47) + "$"), ""),
   },
 };
