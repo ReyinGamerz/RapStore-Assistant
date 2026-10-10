@@ -1497,10 +1497,18 @@ async function runOrderMaintenance(client) {
 }
 
 export function startOrderMaintenance(client) {
-  const run = () => void runOrderMaintenance(client).catch(error => console.error("[order-maintenance]", error?.message || error));
+  let stopped = false;
+  const run = () => {
+    if (stopped) return;
+    void runOrderMaintenance(client).catch(error => console.error("[order-maintenance]", error?.message || error));
+  };
   run();
   const timer = setInterval(run, 30_000);
   timer.unref?.();
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+  };
 }
 
 export async function initializeOrderTicket({ channel, interaction, ticketNumber, ticketId, ticketCode, selectedProduct }) {
