@@ -41,7 +41,7 @@ For a new install, run `npm install`, copy `.env.example` to `.env`, then set `D
 - Tickets are created under `SUPPORT_CATEGORY_ID`.
 - Consultation tickets are for discussion and keep the existing confirmed-close flow.
 - Order tickets create a MongoDB order record and a Components V2 panel with category, product, amount (1–25), unit price, total price, and status. Total price is recalculated when a selection changes.
-- Order statuses: `ON HOLD`, `PROSES`, `DONE`, and `CANCELLED`. Cancelling requires confirmation, updates the order and ticket records, locks the buyer out of the channel, and renames the channel with a `closed-` prefix.
+- Order statuses: `ON HOLD`, `PROSES`, `DONE`, and `CANCELLED`. Cancelling is available while the order is `ON HOLD` and requires confirmation. It updates the order and ticket records, locks the buyer out of the channel, and renames the channel with a `closed-` prefix. Once processing starts, cancellation is disabled.
 - Founder/Admin can mark an order `DONE` after it reaches `PROSES`.
 
 ## Manual payment configuration
