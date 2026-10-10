@@ -11,13 +11,14 @@ Discord digital-store bot built with Node.js, discord.js v14, MongoDB Atlas, and
 For an existing checkout:
 ```bash
 cd ~/RapStore-Assistant
-git pull origin main
+git pull
 npm install
-npm test
-npm run check
-npm run commands:refresh
 npm start
 ```
+
+**Automatic startup safety:** every `npm start` first runs `npm test` and `npm run check`. The bot starts only when both pass; if either fails, startup stops and the error is printed. You can also run `npm run validate` manually at any time to run both checks without starting the bot.
+
+If you changed slash-command definitions, run `npm run commands:refresh` after updating and before starting the bot. This deploys guild-scoped commands for `DISCORD_GUILD_ID`; it does not replace the automatic tests performed by `npm start`.
 
 For a new install, run `npm install`, copy `.env.example` to `.env`, then set `DISCORD_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_GUILD_ID`, and `MONGODB_URI`. The guild ID is required for guild-scoped slash commands. Never commit or share `.env`. If the bot is managed by PM2, restart the existing process rather than starting a duplicate instance.
 
