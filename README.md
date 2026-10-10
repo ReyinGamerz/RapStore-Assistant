@@ -13,18 +13,16 @@ For an existing checkout:
 cd ~/RapStore-Assistant
 git pull origin main
 npm install
-npm test
-npm run check
 npm run commands:refresh
 npm start
 ```
 
-For a new install, run `npm install`, copy `.env.example` to `.env`, then set `DISCORD_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_GUILD_ID`, and `MONGODB_URI`. The guild ID is required for guild-scoped slash commands. Never commit or share `.env`. If the bot is managed by PM2, restart the existing process rather than starting a duplicate instance.
+For a new install, run `npm install`, copy `.env.example` to `.env`, then set `DISCORD_TOKEN`, `DISCORD_CLIENT_ID`, and `MONGODB_URI`. `DISCORD_GUILD_ID` is not used. Slash commands are registered globally, and the refresh script removes old guild-scoped copies from every server the bot is currently in. Never commit or share `.env`. If the bot is managed by PM2, restart the existing process rather than starting a duplicate instance.
 
 ## Active commands
 - `/catalog` — Founder/Admin-only command to create or sync the public catalog message. Members use the public catalog message itself.
 - `/panel` — Founder/Admin-only, private (ephemeral) management panel. It never posts a new public management panel.
-- Slash commands are registered for `DISCORD_GUILD_ID`; `npm run commands:refresh` also removes legacy global registrations. Runtime role checks deny members even if an old command is still cached by Discord.
+- Slash commands are registered globally and do not require `DISCORD_GUILD_ID`. On refresh, the bot replaces the global command set and clears legacy guild-scoped command copies from every server the bot is currently in. Runtime role checks remain authoritative even if Discord temporarily caches old command metadata.
 - The bot refreshes the saved public catalog on startup and removes any legacy public management-panel message recorded by older versions. Catalog data is refreshed after product/category changes made through the private `/panel`.
 - Ticket creation shows a temporary “TIKET SEDANG DIBUAT” status before reporting success or failure.
 - **Edit product:** selecting a product opens its edit form directly. Change the category by entering the exact name of an existing category; new or misspelled category names are rejected.
