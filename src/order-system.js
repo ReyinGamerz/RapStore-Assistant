@@ -507,7 +507,10 @@ async function runOrderMaintenance(client) {
     await publishPendingVouches(client);
     const staleClosingTickets = await db.collection("tickets").find({
       status: "closing",
-      archiveProcessingAt: { $lt: new Date(Date.now() - 5 * 60 * 1000) },
+      $or: [
+        { archiveProcessingAt: { $exists: false } },
+        { archiveProcessingAt: { $lt: new Date(Date.now() - 5 * 60 * 1000) } },
+      ],
     }).sort({ archiveProcessingAt: 1 }).limit(20).toArray();
     for (const staleTicket of staleClosingTickets) {
       try {
@@ -1047,6 +1050,38 @@ export async function handleOrderMessage(message, client) {
     if (!ticket) {
       await message.channel.send(v2(buildPanel("TIKET TIDAK DITEMUKAN", "Command !close hanya berlaku di tiket yang masih terbuka."))).catch(() => {});
       return;
+    }
+    // Explicit !close aborts an unfinished order so it cannot remain payable/processable after its ticket disappears.
+    const activeOrders = await db.collection("orders").find({
+      guildId: message.guild.id,
+      channelId: message.channel.id,
+      status: { $in: ["ON HOLD", "PROSES"] },
+    }).toArray();
+    if (activeOrders.length) {
+      const orderIds = activeOrders.map(order => String(order._id));
+      await db.collection("orders").updateMany({
+        _id: { $in: activeOrders.map(order => order._id) },
+        status: { $in: ["ON HOLD", "PROSES"] },
+      }, {
+        $set: {
+          status: "CANCELLED",
+          paymentStatus: "cancelled",
+          cancelledAt: new Date(),
+          cancelledBy: message.author.id,
+          cancelReason: "manual_ticket_close_command",
+          updatedAt: new Date(),
+        },
+      });
+      await db.collection("payment_proofs").updateMany({
+        orderId: { $in: orderIds },
+        status: "pending",
+      }, {
+        $set: { status: "superseded", updatedAt: new Date(), supersededReason: "ticket_closed_manually" },
+      });
+      await message.channel.send(v2(buildPanel(
+        "PESANAN DIBATALKAN",
+        "Founder/Admin menutup tiket dengan !close. Pesanan yang belum selesai dibatalkan dan bukti pembayaran yang menunggu pemeriksaan dinonaktifkan. Transcript akan disimpan sebelum channel dihapus."
+      ))).catch(() => {});
     }
     try {
       await archiveAndDeleteTicket({
