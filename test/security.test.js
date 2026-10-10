@@ -75,3 +75,16 @@ test("ticket access is restricted to its owner or verified staff", () => {
 test("escapes user-controlled Markdown syntax in file names", () => {
   assert.equal(escapeDiscordMarkdown("a](<@&123>)_x_.png"), "a\\]\\(\\<@&123\\>\\)\\_x\\_.png");
 });
+
+import { expectedProofStatus } from "../src/security.js";
+
+test("reconciles interrupted payment review from authoritative order state", () => {
+  const proof = { _id: "proof-1", status: "pending" };
+  assert.equal(expectedProofStatus(proof, { latestProofId: "proof-1", status: "PROSES", paymentStatus: "verified" }), "accepted");
+  assert.equal(expectedProofStatus(proof, { latestProofId: "proof-1", status: "ON HOLD", paymentStatus: "rejected" }), "rejected");
+  assert.equal(expectedProofStatus(proof, { latestProofId: "proof-1", status: "ON HOLD", paymentStatus: "pending_review" }), "pending");
+  assert.equal(expectedProofStatus(proof, { latestProofId: "proof-2", status: "ON HOLD", paymentStatus: "pending_review" }), "superseded");
+  assert.equal(expectedProofStatus(proof, { latestProofId: "proof-1", status: "CANCELLED", paymentStatus: "cancelled" }), "superseded");
+  assert.equal(expectedProofStatus({ ...proof, status: "accepted" }, { latestProofId: "proof-1", status: "PROSES", paymentStatus: "verified" }), null);
+  assert.equal(expectedProofStatus(proof, null), "superseded");
+});
