@@ -26,7 +26,6 @@ function v2Payload(payload) {
   return buildMessage(payload?.content ?? "", { ephemeral: Boolean(flags & MessageFlags.Ephemeral) });
 }
 function v2EditPayload(content) { return buildComponentsOnly(content); }
-function v2SendPayload(content) { return buildMessage(content); }
 function logError(context, error) { console.error(`[${context}]`, error instanceof Error ? error.message : "Unknown error"); }
 function hasStaffRole(member) {
   return isStaffMember(member, [config.ids.founderRole, config.ids.adminRole]);
@@ -881,7 +880,7 @@ async function handleCatalogSelection(interaction) {
           status: "open", createdAt: new Date(),
         });
         if (isOrder) {
-          await initializeOrderTicket({ channel, interaction, ticketNumber: ticketNumber.number, ticketId: ticketInsert.insertedId, ticketCode, selectedProduct });
+          await initializeOrderTicket({ channel, interaction, ticketId: ticketInsert.insertedId, ticketCode, selectedProduct });
         } else {
           const productLine = selectedProduct ? "\nProduk yang dipilih: **" + safeText(selectedProduct.name, 100) + "**" : "\nProduk belum dipilih dari katalog.";
           const intro = "Halo <@" + interaction.user.id + ">! Silakan tulis pertanyaan produk lu di sini.";
