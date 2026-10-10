@@ -50,6 +50,17 @@ async function getProductCategories() {
   if (!map.has("Umum")) map.set("Umum","");
   return [...map.entries()].sort((a,b)=>a[0].localeCompare(b[0])).slice(0,25).map(([name,emoji])=>({name,emoji}));
 }
+function parseDiscordEmoji(value) {
+  const text = safeText(value, 100);
+  const match = text.match(/^<(a?):([a-zA-Z0-9_]{2,32}):(\\d{17,20})>$/);
+  if (!match) return null;
+  return { name: match[2], id: match[3], animated: match[1] === "a" };
+}
+function categoryDisplay(category) {
+  const name = safeText(category?.name, 80);
+  const match = name.match(/^(<a?:[a-zA-Z0-9_]{2,32}:\\d{17,20}>)\\s*(.*)$/);
+  return { name: match && match[2] ? match[2] : name, emoji: parseDiscordEmoji(category?.emoji) || (match ? parseDiscordEmoji(match[1]) : null) };
+}
 function encodeCategory(category) { return Buffer.from(category, "utf8").toString("base64url"); }
 function decodeCategory(encoded) { try { return Buffer.from(encoded, "base64url").toString("utf8"); } catch { return ""; } }
 async function showCategoryPicker(interaction, mode, productId = "", responseMode = "reply") {
@@ -58,11 +69,12 @@ async function showCategoryPicker(interaction, mode, productId = "", responseMod
     .setCustomId("rapstore:panelchoose:" + mode + (productId ? ":" + productId : ""))
     .setPlaceholder("Pilih kategori")
     .setMinValues(1).setMaxValues(1)
-    .addOptions(categories.map(category => ({
-      label: ((category.emoji ? category.emoji + " " : "") + category.name).slice(0, 100),
-      value: encodeCategory(category.name),
-      description: "Gunakan kategori ini",
-    })));
+    .addOptions(categories.map(category => {
+      const display = categoryDisplay(category);
+      const option = { label: display.name.slice(0, 100), value: encodeCategory(category.name), description: "Gunakan kategori ini" };
+      if (display.emoji) option.emoji = display.emoji;
+      return option;
+    }));
   const panel = buildPanel("PILIH KATEGORI", "Pilih kategori yang sudah ada. Untuk membuat atau mengganti nama kategori, gunakan tombol kategori di panel utama.");
   panel.addActionRowComponents(new ActionRowBuilder().addComponents(menu));
   const payload = { flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral, components: [panel] };
@@ -119,7 +131,12 @@ async function handleFounderPanelButton(interaction) {
       .setCustomId("rapstore:panelchoose:editcategorymanage")
       .setPlaceholder("Pilih kategori yang ingin diedit")
       .setMinValues(1).setMaxValues(1)
-      .addOptions(categories.slice(0,25).map(cat=>({label:((cat.emoji?cat.emoji+" ":"")+cat.name).slice(0,100),value:encodeCategory(cat.name)})));
+      .addOptions(categories.slice(0,25).map(cat => {
+        const display = categoryDisplay(cat);
+        const option = { label: display.name.slice(0,100), value: encodeCategory(cat.name) };
+        if (display.emoji) option.emoji = display.emoji;
+        return option;
+      }));
     const panel = buildPanel("EDIT KATEGORI","Pilih kategori yang ingin diubah.");
     panel.addActionRowComponents(new ActionRowBuilder().addComponents(menu));
     await interaction.editReply({flags:MessageFlags.IsComponentsV2|MessageFlags.Ephemeral,components:[panel]});
@@ -259,8 +276,9 @@ async function renderCatalogPanel(interaction, selectedCategory = "", selectedPr
     lines.push("Pilih kategori dari menu di bawah untuk melihat katalog produk.");
   } else {
     const categoryRecord = await db.collection("categories").findOne({ name: category });
-    const categoryEmoji = categoryRecord?.emoji || list.find(p => p.categoryEmoji)?.categoryEmoji || "";
-    lines.push("**Category:** " + (categoryEmoji ? safeText(categoryEmoji,100) + " " : "") + category, "");
+    const categoryInfo = categoryDisplay({ name: category, emoji: categoryRecord?.emoji || list.find(p => p.categoryEmoji)?.categoryEmoji || "" });
+    const emojiText = categoryInfo.emoji ? "<" + (categoryInfo.emoji.animated ? "a" : "") + ":" + categoryInfo.emoji.name + ":" + categoryInfo.emoji.id + "> " : "";
+    lines.push("**Category:** " + emojiText + categoryInfo.name, "");
     if (!list.length) {
       lines.push("Belum ada produk aktif di kategori ini.");
     } else {
@@ -272,7 +290,7 @@ async function renderCatalogPanel(interaction, selectedCategory = "", selectedPr
           ? name.replace(/\b(\d+x)\b/g, "`$1`").replace(/\b(\d+)\s+Month\b/gi, "`$1` Month")
           : name;
         lines.push("**" + (safeText(product.emoji,100) ? safeText(product.emoji,100) + " " : "") + displayName + "**");
-        lines.push("**Harga:** `" + formatPrice(retail).replace(/^Rp\s*/, "Rp") + "`", "");
+        lines.push("<:alur:1553800809198649344>**Harga:** `" + formatPrice(retail).replace(/^Rp\s*/, "Rp") + "`", "");
       }
     }
   }
@@ -283,28 +301,35 @@ async function renderCatalogPanel(interaction, selectedCategory = "", selectedPr
   panel.addTextDisplayComponents(new TextDisplayBuilder().setContent(lines.join("\n").slice(0, 3900)));
   panel.addSeparatorComponents(new SeparatorBuilder());
 
+  const categoryRecords = await getProductCategories();
+  const categoryEmojiMap = new Map(categoryRecords.map(item => [item.name, item.emoji]));
   const categoryMenu = new StringSelectMenuBuilder()
     .setCustomId("rapstore:catalog:category")
-    .setPlaceholder(category ? ("Kategori: " + category).slice(0, 150) : "Pilih Kategori")
+    .setPlaceholder(category ? ("Kategori: " + categoryDisplay({name:category,emoji:categoryEmojiMap.get(category)}).name).slice(0, 150) : "Pilih Kategori")
     .setMinValues(1).setMaxValues(1)
-    .addOptions((categories.length ? categories : ["Belum ada kategori"]).slice(0, 25).map(c => ({
-      label: c.slice(0, 100),
-      value: c,
-      description: "Buka katalog kategori " + c,
-      default: Boolean(category) && c === category,
-    })));
+    .addOptions((categories.length ? categories : ["Belum ada kategori"]).slice(0, 25).map(c => {
+      const display = categoryDisplay({name:c,emoji:categoryEmojiMap.get(c)});
+      const option = { label: display.name.slice(0, 100), value: c, description: "Buka katalog kategori " + display.name, default: Boolean(category) && c === category };
+      if (display.emoji) option.emoji = display.emoji;
+      return option;
+    }));
   if (!categories.length) categoryMenu.setDisabled(true);
 
   const productMenu = new StringSelectMenuBuilder()
     .setCustomId("rapstore:catalog:product")
     .setPlaceholder(selectedProduct ? safeText(selectedProduct.name, 150) : "Pilih Produk")
     .setMinValues(1).setMaxValues(1);
-  const productOptions = list.slice(0, 25).map(p => ({
-    label: safeText(p.name, 100),
-    value: String(p._id),
-    description: ("Lihat informasi produk • " + formatPrice(p.price)).slice(0, 100),
-    default: Boolean(selectedProduct) && String(p._id) === String(selectedProduct._id),
-  }));
+  const productOptions = list.slice(0, 25).map(p => {
+    const option = {
+      label: safeText(p.name, 100),
+      value: String(p._id),
+      description: ("Lihat informasi produk • " + formatPrice(p.price)).slice(0, 100),
+      default: Boolean(selectedProduct) && String(p._id) === String(selectedProduct._id),
+    };
+    const emoji = parseDiscordEmoji(p.emoji);
+    if (emoji) option.emoji = emoji;
+    return option;
+  });
   if (productOptions.length) productMenu.addOptions(productOptions);
   else productMenu.addOptions([{
     label: category ? "Tidak ada produk" : "Pilih kategori dulu",
