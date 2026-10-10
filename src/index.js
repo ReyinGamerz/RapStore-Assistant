@@ -637,13 +637,20 @@ async function handleCatalogSelection(interaction) {
     }
     const { ObjectId } = await import("mongodb");
     let selectedProduct = null;
-    if (selectedProductId && ObjectId.isValid(selectedProductId)) {
+    if (selectedProductId) {
+      if (!ObjectId.isValid(selectedProductId)) {
+        await interaction.followUp(v2Payload({ content: "Produk tidak valid. Pilih produk dari katalog lalu coba lagi.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
+        return;
+      }
       selectedProduct = await db.collection("products").findOne({ _id: new ObjectId(selectedProductId), active: true });
+      if (!selectedProduct) {
+        await interaction.followUp(v2Payload({ content: "Produk sudah tidak tersedia. Perbarui katalog lalu coba lagi.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
+        return;
+      }
     }
     const existing = await db.collection("tickets").findOne({
       guildId: interaction.guildId,
       buyerId: interaction.user.id,
-      type: ticketType,
       status: "open",
     });
     if (existing) {
