@@ -691,6 +691,23 @@ async function publishPendingVouches(client) {
       const date = new Date(vouch.createdAt || Date.now()).toLocaleDateString("id-ID", {
         timeZone: "Asia/Jakarta", day: "numeric", month: "long", year: "numeric",
       });
+      const marker = "RAP-VOUCH-KEY:" + clean(vouch.orderCode || "legacy", 40);
+      let existingMessage = null;
+      let before;
+      // A Discord send can succeed while the database write fails. Search recent archive history before retrying.
+      for (let page = 0; page < 10 && !existingMessage; page++) {
+        const recent = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
+        if (!recent.size) break;
+        existingMessage = recent.find(candidate => {
+          try {
+            return JSON.stringify(candidate.components.map(component => component.toJSON?.() ?? component)).includes(marker);
+          } catch {
+            return false;
+          }
+        }) || null;
+        before = recent.last().id;
+        if (recent.size < 100) break;
+      }
       const panel = new ContainerBuilder();
       panel.addTextDisplayComponents(new TextDisplayBuilder().setContent("## RAP — CUSTOMER TESTIMONI\n-# VERIFIED TRANSACTION"));
       divider(panel);
