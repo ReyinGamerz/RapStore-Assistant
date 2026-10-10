@@ -1078,13 +1078,15 @@ async function main() {
     console.log(`Logged in as ${readyClient.user.tag}; MongoDB Atlas ready.`);
     void refreshPersistentPanels(readyClient).catch(error => logError("persistent-panel-startup-sync", error));
   });
+  const ready = new Promise(resolve => client.once(Events.ClientReady, resolve));
   await client.login(config.discordToken);
+  const readyClient = client.isReady() ? client : await ready;
   startOrderMaintenance(client);
   try {
-    await refreshGlobalCommands();
+    await refreshGlobalCommands({ guildIds: [...readyClient.guilds.cache.keys()] });
   } catch (error) {
     logError("global-command-refresh", error);
-    console.error("Bot tetap berjalan, tetapi slash command guild belum berhasil diperbarui. Periksa DISCORD_GUILD_ID dan jalankan npm run commands:refresh setelah memperbaiki error.");
+    console.error("Bot tetap berjalan, tetapi refresh global slash commands atau pembersihan command guild lama belum selesai. Periksa izin aplikasi bot dan jalankan npm run commands:refresh lagi.");
   }
 }
 
