@@ -91,7 +91,7 @@ function makeSelect(customId, placeholder, options, disabled = false) {
 async function buildOrderPanel(order) {
   const categories = await orderCategories();
   const products = await productsInCategory(order.category);
-  const locked = order.status !== "ON HOLD" || order.paymentStatus === "verified";
+  const locked = order.status !== "ON HOLD" || ["verified", "pending_review"].includes(order.paymentStatus);
   const container = new ContainerBuilder();
   container.addTextDisplayComponents(new TextDisplayBuilder().setContent("## 🛒 PESANAN " + clean(order.orderCode, 40)));
   divider(container);
@@ -404,7 +404,7 @@ export async function handleOrderInteraction(interaction, client) {
   }
 
   if (interaction.isButton() && (customId === "rapstore:payment:qris" || customId === "rapstore:payment:bank")) {
-    if (order.status !== "ON HOLD" || order.paymentStatus === "verified") {
+    if (order.status !== "ON HOLD" || ["verified", "pending_review"].includes(order.paymentStatus)) {
       await replyNotice(interaction, "PEMBAYARAN TERKUNCI", "Pilihan pembayaran tidak dapat diubah setelah pesanan diproses.");
       return;
     }
@@ -434,12 +434,13 @@ export async function handleOrderInteraction(interaction, client) {
   }
 
   if (interaction.isStringSelectMenu() && customId.startsWith("rapstore:order:")) {
-    if (order.status !== "ON HOLD" || order.paymentStatus === "verified") {
+    if (order.status !== "ON HOLD" || ["verified", "pending_review"].includes(order.paymentStatus)) {
       await replyNotice(interaction, "PESANAN TERKUNCI", "Pilihan pesanan tidak dapat diubah setelah diproses.");
       return;
     }
     const selection = interaction.values[0];
-    const changes = { updatedAt: new Date() };
+    const previousPaymentMethod = order.paymentMethod;
+    const changes = { updatedAt: new Date(), paymentMethod: null, paymentStatus: "unpaid" };
     if (customId === "rapstore:order:category") {
       const categories = await orderCategories();
       if (!categories.includes(selection)) {
@@ -480,6 +481,10 @@ export async function handleOrderInteraction(interaction, client) {
     await db.collection("orders").updateOne({ _id: order._id, status: "ON HOLD", paymentStatus: { $ne: "verified" } }, { $set: changes });
     const updated = await db.collection("orders").findOne({ _id: order._id });
     await interaction.update(await buildOrderPanel(updated));
+    if (previousPaymentMethod && order.paymentMessageId) {
+      const paymentMessage = await interaction.channel.messages.fetch(order.paymentMessageId).catch(() => null);
+      if (paymentMessage) await paymentMessage.edit(buildPaymentPicker()).catch(() => {});
+    }
     await db.collection("audit_logs").insertOne({
       action: "order.updated", actorId: interaction.user.id, guildId: interaction.guildId,
       details: { orderId: String(order._id), orderCode: order.orderCode, category: updated.category, productId: updated.productId, amount: updated.amount, totalPrice: updated.totalPrice },
