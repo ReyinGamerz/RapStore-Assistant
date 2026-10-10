@@ -18,7 +18,6 @@ import {
 import { randomBytes } from "node:crypto";
 import { ObjectId } from "mongodb";
 import { config } from "./config.js";
-import { persistTicketAttachments } from "./cloud-storage.js";
 import { getDatabase } from "./database.js";
 import { buildPanel } from "./ui.js";
 
@@ -345,7 +344,7 @@ function transcriptImage(url, alt, className = "attachment-image") {
     '" loading="lazy" referrerpolicy="no-referrer"></a>';
 }
 
-function renderTranscriptEmbed(embed) {
+function renderTranscriptEmbed(embed, archivedImageUrls = new Map()) {
   const author = embed.author?.name
     ? '<div class="embed-author">' + (embed.author.iconURL ? transcriptImage(embed.author.iconURL, "", "embed-author-icon") : "") +
       (embed.author.url ? transcriptLink(embed.author.url, embed.author.name) : escapeHtml(embed.author.name)) + '</div>'
@@ -358,8 +357,8 @@ function renderTranscriptEmbed(embed) {
     '<div class="embed-field' + (field.inline ? ' inline' : '') + '"><div class="embed-field-name">' +
     escapeHtml(field.name) + '</div><div class="embed-field-value">' + escapeHtml(field.value) + '</div></div>'
   ).join("");
-  const image = embed.image?.url ? transcriptImage(embed.image.url, embed.title || "Gambar embed", "embed-image") : "";
-  const thumbnail = embed.thumbnail?.url ? transcriptImage(embed.thumbnail.url, embed.title || "Thumbnail embed", "embed-thumbnail") : "";
+  const image = embed.image?.url ? transcriptImage(archivedImageUrls.get(embed.image.url) || embed.image.url, embed.title || "Gambar embed", "embed-image") : "";
+  const thumbnail = embed.thumbnail?.url ? transcriptImage(archivedImageUrls.get(embed.thumbnail.url) || embed.thumbnail.url, embed.title || "Thumbnail embed", "embed-thumbnail") : "";
   const footer = embed.footer?.text
     ? '<div class="embed-footer">' + (embed.footer.iconURL ? transcriptImage(embed.footer.iconURL, "", "embed-footer-icon") : "") +
       escapeHtml(embed.footer.text) + (embed.timestamp ? ' • ' + escapeHtml(new Date(embed.timestamp).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })) : "") + '</div>'
@@ -391,6 +390,69 @@ function transcriptSuffix() {
   let value = "";
   while (value.length < 5) value += randomBytes(8).toString("base64url").replace(/[^a-zA-Z0-9]/g, "");
   return value.slice(0, 5);
+}
+
+function isImageAttachment(attachment) {
+  const contentType = String(attachment?.contentType || "").toLowerCase().split(";")[0].trim();
+  const name = String(attachment?.name || "");
+  return contentType.startsWith("image/") || /\.(png|jpe?g|gif|webp|avif|bmp|tiff?)$/i.test(name);
+}
+
+async function archiveTicketImages(archiveChannel, messages, ticket, archiveKey, baseName) {
+  const photos = [];
+  const seenUrls = new Set();
+  for (const message of messages) {
+    for (const attachment of message.attachments?.values?.() || []) {
+      if (!attachment?.url || !isImageAttachment(attachment) || seenUrls.has(attachment.url)) continue;
+      seenUrls.add(attachment.url);
+      const token = String(attachment.id || message.id + "-" + photos.length).replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 100);
+      photos.push({
+        messageId: message.id,
+        attachment,
+        marker: archiveKey + "-photo-" + token,
+      });
+    }
+  }
+
+  const urls = new Map();
+  if (!photos.length) return urls;
+
+  // Reuse photos already copied during an interrupted archive attempt.
+  const markerLookup = new Map(photos.map(photo => ["[archive-photo-key:" + photo.marker + "]", photo]));
+  let before;
+  for (let page = 0; page < 10; page++) {
+    const batch = await archiveChannel.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
+    if (!batch.size) break;
+    for (const message of batch.values()) {
+      const content = String(message.content || "");
+      for (const [marker, photo] of markerLookup) {
+        if (!content.includes(marker)) continue;
+        const archived = message.attachments?.first();
+        if (!archived?.url) {
+          throw new Error("Foto arsip ditemukan dengan penanda yang benar, tetapi lampirannya tidak terbaca. Tiket dipertahankan.");
+        }
+        urls.set(photo.attachment.url, archived.url);
+      }
+    }
+    before = batch.last().id;
+    if (batch.size < 100 || photos.every(photo => urls.has(photo.attachment.url))) break;
+  }
+
+  for (const photo of photos) {
+    if (urls.has(photo.attachment.url)) continue;
+    const name = clean(photo.attachment.name || "foto-tiket.png", 180).replace(/[\\/]/g, "_");
+    const archivedMessage = await archiveChannel.send({
+      content: "Foto tiket #" + baseName + " [archive-photo-key:" + photo.marker + "]",
+      files: [{ attachment: photo.attachment.url, name }],
+      allowedMentions: { parse: [], users: [], roles: [] },
+    });
+    const archived = archivedMessage.attachments?.first();
+    if (!archived?.url) {
+      throw new Error("Discord tidak mengembalikan URL setelah mengarsipkan foto '" + name + "'. Tiket dipertahankan.");
+    }
+    urls.set(photo.attachment.url, archived.url);
+  }
+  return urls;
 }
 
 export async function archiveAndDeleteTicket({ channel, ticket, client, closedBy = null, reason = "ticket_closed" }) {
@@ -449,8 +511,11 @@ export async function archiveAndDeleteTicket({ channel, ticket, client, closedBy
       if (batch.size < 100) break;
     }
     messages.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
-    // Persist attachments before rendering/uploading the transcript. If cloud upload fails, keep the ticket intact.
-    const persistentAttachmentUrls = await persistTicketAttachments(messages, ticket);
+    const baseName = clean(ticket.ticketPrefix && Number.isInteger(ticket.ticketNumber)
+      ? ticket.ticketPrefix + "-" + ticket.ticketNumber : channel.name.replace(/^closed-/, ""), 80).replace(/[^a-zA-Z0-9_-]/g, "-");
+    // Copy image attachments into the transcript channel first, then use those new Discord CDN URLs in the HTML.
+    // If any image cannot be archived, keep the original ticket so no proof/photo is lost.
+    const archivedImageUrls = await archiveTicketImages(archiveChannel, messages, ticket, archiveKey, baseName);
     const messageById = new Map(messages.map(message => [message.id, message]));
     const rows = messages.map(message => {
       const author = message.member?.displayName || message.author?.globalName || message.author?.username || "Unknown";
@@ -468,23 +533,26 @@ export async function archiveAndDeleteTicket({ channel, ticket, client, closedBy
       const text = transcriptMessageText(message);
       const componentsText = componentTranscriptText(message.components);
       const componentMedia = componentTranscriptMedia(message.components).map(item =>
-        '<div class="component-media">' + transcriptImage(item.url, item.description) +
+        '<div class="component-media">' + transcriptImage(archivedImageUrls.get(item.url) || item.url, item.description) +
         (item.description ? '<div class="attachment-meta"><span>' + escapeHtml(item.description) + '</span></div>' : "") + '</div>'
       ).join("");
       const content = text ? '<div class="message-content">' + escapeHtml(text).replace(/\n/g, "<br>") + '</div>' : "";
       const componentPanel = componentsText.length
         ? '<div class="component-panel">' + componentsText.map(line => '<div>' + escapeHtml(line).replace(/\n/g, "<br>") + '</div>').join("") + '</div>'
         : "";
-      const embeds = [...(message.embeds || [])].map(renderTranscriptEmbed).join("");
+      const embeds = [...(message.embeds || [])].map(embed => renderTranscriptEmbed(embed, archivedImageUrls)).join("");
       const attachments = [...(message.attachments?.values?.() || [])].map(file => {
-        const url = safeHttpUrl(persistentAttachmentUrls.get(file.url) || file.url);
-        const name = file.name || "attachment";
-        const type = String(file.contentType || "").toLowerCase();
-        const isImage = type.startsWith("image/") || /\.(png|jpe?g|gif|webp|avif|bmp)$/i.test(name);
-        const preview = isImage ? transcriptImage(url, name) : "";
-        return '<div class="attachment">' + (preview ? preview : '<div class="file-icon">↗</div>') +
+        if (!isImageAttachment(file)) {
+          return '<div class="attachment-meta"><span>File tidak disimpan di arsip.</span></div>';
+        }
+        const url = safeHttpUrl(archivedImageUrls.get(file.url));
+        if (!url) throw new Error("Foto '" + (file.name || "lampiran") + "' belum memiliki URL arsip. Tiket dipertahankan.");
+        const name = file.name || "foto";
+        const type = String(file.contentType || "image").toLowerCase();
+        const preview = transcriptImage(url, name);
+        return '<div class="attachment">' + preview +
           '<div class="attachment-meta">' + transcriptLink(url, name, "attachment-name") +
-          '<span>' + escapeHtml(type || "File lampiran") + (Number.isFinite(file.size) ? ' • ' + escapeHtml((file.size / 1024).toFixed(1)) + ' KB' : "") +
+          '<span>' + escapeHtml(type) + (Number.isFinite(file.size) ? ' • ' + escapeHtml((file.size / 1024).toFixed(1)) + ' KB' : "") +
           '</span></div></div>';
       }).join("");
       const stickers = [...(message.stickers?.values?.() || [])].map(sticker =>
@@ -499,8 +567,6 @@ export async function archiveAndDeleteTicket({ channel, ticket, client, closedBy
         (attachments ? '<div class="attachments">' + attachments + '</div>' : "") + stickers + '</div></article>';
     }).join("\n");
     const guildName = channel.guild?.name || "Discord Server";
-    const baseName = clean(ticket.ticketPrefix && Number.isInteger(ticket.ticketNumber)
-      ? ticket.ticketPrefix + "-" + ticket.ticketNumber : channel.name.replace(/^closed-/, ""), 80).replace(/[^a-zA-Z0-9_-]/g, "-");
     const html = '<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="dark"><title>' +
       escapeHtml(baseName) + ' — RapStore Transcript</title><style>' +
       ':root{color-scheme:dark;--bg:#313338;--panel:#2b2d31;--muted:#949ba4;--text:#dbdee1;--line:#3f4147;--accent:#5865f2}' +
