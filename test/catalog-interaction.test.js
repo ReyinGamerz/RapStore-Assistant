@@ -53,3 +53,10 @@ test("catalog is staff-published and the founder panel remains ephemeral", () =>
   assert.match(source, /if \(interaction\.commandName === "catalog"\)[\s\S]*?if \(!hasStaffRole\(interaction\.member\)\)/);
   assert.match(source, /await upsertPersistentPanel\(interaction, "catalog", await buildCatalogPayload\(\)\)/);
 });
+
+
+test("catalog uses the requested custom alur and Catalog emojis", () => {
+  assert.match(source, /<:alur:1558458209977499740> \\*\\*Harga:\\*\\*/);
+  assert.match(source, /### <:Catalog:1558470276981850132> RAPSTORE — CATALOG/);
+  assert.doesNotMatch(source, /<:alur:1553800809198649344>/);
+});
