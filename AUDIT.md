@@ -44,6 +44,7 @@ The audit branch fixes the confirmed runtime defects, shared catalog selection b
 | `package.json` | Runtime/dependencies/npm scripts | REVIEWED — CI PASS | Added `prestart` and `validate`; syntax check includes new module |
 | `.github/workflows/ci.yml` | GitHub Actions | REVIEWED — PASS | Run [#38048167806](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38048167806) passed install, tests, and syntax checks |
 | `README.md` | Setup/operation guide | REVIEWED — UPDATED | Aligned with global commands and automatic validation |
+| `AUDIT.md` | Audit log/report | REVIEWED — UPDATED | Records scope, findings, remediation, CI evidence, and residual risks |
 | `.env.example` | Environment template | REVIEWED — UPDATED | Removed `DISCORD_GUILD_ID` |
 | `.gitignore` | Local secret/runtime exclusions | REVIEWED | Ignores `.env` and `.env.*`, with `.env.example` explicitly allowed |
 | `LICENSE` | License | REVIEWED | GNU General Public License version 2 text is present; confirm this matches the project's intended licensing |
@@ -90,7 +91,8 @@ Command definitions live in `src/commands.js`. The event router is in `src/index
 | AUD-006 | P2 | High | Test coverage | Existing tests are primarily pure helper tests; full Discord/MongoDB end-to-end tests are not present in the inspected inventory | OPEN — integration environment needed |
 | AUD-007 | P2 | Medium | MongoDB index initialization | Unique-index creation may fail on production data containing duplicates or incompatible legacy records | BLOCKED — inspect metadata/backup before migration |
 | AUD-008 | P2 | High | Public persistent catalog | Category/product selection edited the shared public message; users could interfere with each other's selection state | FIXED — PENDING LIVE E2E; each user now gets a private catalog copy on first selection |
-| AUD-009 | P2 | High | `src/order-system.js`, `src/index.js` shutdown | Maintenance interval was never cleared and an active run was not awaited before MongoDB closed | FIXED — PENDING TEST |
+| AUD-009 | P2 | High | `src/order-system.js`, `src/index.js` shutdown | Maintenance interval was never cleared and an active run was not awaited before MongoDB closed | FIXED — CI PASS; LIVE SHUTDOWN TEST NOT RUN |
+| AUD-010 | P2 | Medium | Dependencies / CI | Dependency advisories were not checked with `npm audit`; the local environment could not access the registry and no lockfile is present | OPEN — run dependency audit after lockfile/registry access |
 
 ## E. Security and permission matrix
 
@@ -131,7 +133,7 @@ No production Discord server, MongoDB database, or VPS was modified.
 | Existing `test/security.test.js` | Unit | PASS | All unit tests completed successfully in GitHub Actions run [#38048167806](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38048167806) |
 | New `test/ticket-recovery.test.js` | Regression unit | PASS | Added on audit branch and passed in GitHub Actions run [#38048167806](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38048167806) |
 | `npm run check` | Syntax | PASS | `src/ticket-recovery.js` included; all configured `node --check` commands passed in GitHub Actions run [#38048167806](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38048167806) |
-| Maintenance shutdown | Static review | NOT RUN — PENDING CI | Timer clear and active-run wait are wired; no live shutdown test |
+| Maintenance shutdown | Static review | PASS (code review) | Timer clear and active-run wait are wired; no live shutdown test |
 | Global command refresh | Discord integration | BLOCKED | Requires real bot token and Discord API |
 | Ticket permission/visibility | Live E2E | BLOCKED | Requires configured Discord test server |
 | Payment proof, vouch, transcript lifecycle | Live E2E | BLOCKED | Requires Discord + MongoDB test environment |
@@ -141,6 +143,7 @@ No production Discord server, MongoDB database, or VPS was modified.
 
 - CI run #38048167806 passed unit tests and syntax checks; live behavior and dependency/security-history checks remain unverified.
 - No package lockfile exists. Dependency versions are not fully reproducible until a lockfile is generated and committed in an environment with registry access.
+- `npm audit`/advisory checks and exhaustive secret scanning of commit history remain unverified.
 - Global command propagation can take time. Legacy guild command cleanup only covers guilds the bot can currently enumerate.
 - Discord role/channel permissions, Components V2 payloads, transcript uploads, and MongoDB concurrency need controlled live tests.
 - The per-user catalog flow needs a live Discord smoke test to verify the public message remains unchanged and ephemeral interactions update only the invoking user's private copy.
