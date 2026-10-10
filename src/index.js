@@ -377,51 +377,109 @@ async function handleFounderPanelSelect(interaction) {
 }
 
 async function handleFounderPanelModal(interaction) {
-  if (!interaction.inGuild() || !hasStaffRole(interaction.member)) { await interaction.reply(v2Payload({content:"Akses ditolak.",flags:EPHEMERAL|MessageFlags.IsComponentsV2})); return; }
+  if (!interaction.inGuild() || !hasStaffRole(interaction.member)) {
+    await interaction.reply(v2Payload({content:"Akses ditolak.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
+    return;
+  }
   await interaction.deferReply({ flags: EPHEMERAL | MessageFlags.IsComponentsV2 });
-  const db=getDatabase(), parts=interaction.customId.split(":");
-  if(parts[2]==="category"){
-    const categoryAction=parts[3];
-    const name=safeText(interaction.fields.getTextInputValue("nama_kategori"),80);
-    const emoji=safeText(interaction.fields.getTextInputValue("emoji_kategori")||"",100);
-    if(!name){await interaction.editReply(v2Payload({content:"Nama kategori wajib diisi.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;}
-    const collection=db.collection("categories");
-    if(categoryAction==="add"){
-      const existing=await collection.findOne({name});
-      if(existing){await interaction.editReply(v2Payload({content:"Kategori itu sudah ada. Gunakan Edit Kategori untuk mengubahnya.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;}
-      await collection.insertOne({name,emoji,createdAt:new Date(),createdBy:interaction.user.id});
-      await interaction.editReply(v2Payload({content:"Kategori **"+(emoji?emoji+" ":"")+name+"** berhasil dibuat. Sekarang kategori tersedia di dropdown Tambah Produk.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;
+  const db = getDatabase();
+  const parts = interaction.customId.split(":");
+
+  if (parts[2] === "category") {
+    const categoryAction = parts[3];
+    const name = safeText(interaction.fields.getTextInputValue("nama_kategori"),80);
+    const emoji = safeText(interaction.fields.getTextInputValue("emoji_kategori") || "",100);
+    if (!name) {
+      await interaction.editReply(v2Payload({content:"Nama kategori wajib diisi.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
+      return;
     }
-    const oldName=decodeCategory(parts[4]||"");
-    if(!oldName){await interaction.editReply(v2Payload({content:"Kategori lama tidak valid.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;}
-    if(name!==oldName && await collection.findOne({name})){await interaction.editReply(v2Payload({content:"Nama kategori itu sudah digunakan.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;}
+    const collection = db.collection("categories");
+    if (categoryAction === "add") {
+      if (await findCanonicalCategory(name)) {
+        await interaction.editReply(v2Payload({content:"Kategori dengan nama tersebut sudah ada. Gunakan Edit Kategori jika ingin mengubahnya.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
+        return;
+      }
+      await collection.insertOne({name,emoji,createdAt:new Date(),createdBy:interaction.user.id});
+      await audit("category.created",interaction,{category:name});
+      await interaction.editReply(v2Payload({content:"Kategori **"+(emoji?emoji+" ":"")+name+"** berhasil dibuat.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
+      return;
+    }
+
+    const reference = parts[4] || "";
+    const {ObjectId} = await import("mongodb");
+    const oldRecord = ObjectId.isValid(reference)
+      ? await collection.findOne({_id:new ObjectId(reference)})
+      : await collection.findOne({name:decodeCategory(reference)});
+    const oldName = oldRecord?.name || (ObjectId.isValid(reference) ? "" : decodeCategory(reference));
+    if (!oldName) {
+      await interaction.editReply(v2Payload({content:"Kategori lama tidak ditemukan. Buka Edit Kategori lagi.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
+      return;
+    }
+    const canonical = await findCanonicalCategory(name);
+    if (canonical && canonical.toLocaleLowerCase("id-ID") !== oldName.toLocaleLowerCase("id-ID")) {
+      await interaction.editReply(v2Payload({content:"Nama kategori itu sudah digunakan.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
+      return;
+    }
     await collection.updateOne({name:oldName},{$set:{name,emoji,updatedAt:new Date(),updatedBy:interaction.user.id}},{upsert:true});
-    if(name!==oldName) await db.collection("products").updateMany({category:oldName},{$set:{category:name,categoryEmoji:emoji,updatedAt:new Date()}});
-    else await db.collection("products").updateMany({category:name},{$set:{categoryEmoji:emoji,updatedAt:new Date()}});
-    await interaction.editReply(v2Payload({content:"Kategori berhasil diperbarui.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;
+    if (name !== oldName) {
+      await db.collection("products").updateMany({category:oldName},{$set:{category:name,categoryEmoji:emoji,updatedAt:new Date()}});
+    } else {
+      await db.collection("products").updateMany({category:name},{$set:{categoryEmoji:emoji,updatedAt:new Date()}});
+    }
+    await audit("category.updated",interaction,{oldName,name});
+    await interaction.editReply(v2Payload({content:"Kategori berhasil diperbarui.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
+    return;
   }
-  const action=parts[2];
-  if(action!=="add"&&action!=="edit") return;
-  const name=safeText(interaction.fields.getTextInputValue("nama"),100);
-  const price=Number(interaction.fields.getTextInputValue("harga"));
-  const categoryToken=action==="add" ? parts[3] : parts[4];
-  const categoryField=interaction.fields.fields?.get("kategori");
-  const category=safeText(categoryField ? interaction.fields.getTextInputValue("kategori") : decodeCategory(categoryToken)||"Umum",80)||"Umum";
-  const description=safeText(interaction.fields.getTextInputValue("deskripsi")||"",500);
-  const emoji=safeText(interaction.fields.getTextInputValue("emoji_produk")||"",100);
-  if(!name||!Number.isSafeInteger(price)||price<1||!category){await interaction.editReply(v2Payload({content:"Nama, kategori, dan harga wajib valid. Harga harus berupa angka positif.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;}
-  if(action==="add"){
-    const now=new Date();const result=await db.collection("products").insertOne({name,price,category,emoji,description,active:true,currency:"IDR",createdAt:now,updatedAt:now,createdBy:interaction.user.id});
-    await audit("product.created",interaction,{productId:String(result.insertedId),source:"panel"});
-    await interaction.editReply(v2Payload({content:"Produk berhasil dibuat dalam kategori **"+category+"**. ID: "+result.insertedId,flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;
+
+  const action = parts[2];
+  if (action !== "add" && action !== "edit") return;
+  const name = safeText(interaction.fields.getTextInputValue("nama"),100);
+  const price = Number(interaction.fields.getTextInputValue("harga"));
+  const description = safeText(interaction.fields.getTextInputValue("deskripsi") || "",500);
+  const emoji = safeText(interaction.fields.getTextInputValue("emoji_produk") || "",100);
+
+  let category;
+  if (action === "add") {
+    category = await findCanonicalCategory(decodeCategory(parts[3] || ""));
+  } else {
+    const requestedCategory = safeText(interaction.fields.getTextInputValue("kategori"),80);
+    category = await findCanonicalCategory(requestedCategory);
+    if (!category) {
+      await interaction.editReply(v2Payload({content:"Kategori **"+requestedCategory+"** belum ada. Isi nama kategori yang sudah tersedia, atau buat dulu lewat Add Kategori.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
+      return;
+    }
   }
-  const id=parts[3];const {ObjectId}=await import("mongodb");
-  if(!ObjectId.isValid(id)){await interaction.editReply(v2Payload({content:"ID produk tidak valid.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;}
-  const result=await db.collection("products").updateOne({_id:new ObjectId(id)},{$set:{name,price,category,emoji,description,updatedAt:new Date(),updatedBy:interaction.user.id}});
-  if(!result.matchedCount){await interaction.editReply(v2Payload({content:"Produk tidak ditemukan.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;}
-  await audit("product.updated",interaction,{productId:id,source:"panel"});
-  await interaction.editReply(v2Payload({content:"Produk berhasil diperbarui.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
+  if (!name || !Number.isSafeInteger(price) || price < 1 || !category) {
+    await interaction.editReply(v2Payload({content:"Nama dan kategori wajib valid. Harga harus berupa angka positif dan kategori harus sudah tersedia.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
+    return;
+  }
+
+  if (action === "add") {
+    const now = new Date();
+    const result = await db.collection("products").insertOne({name,price,category,emoji,description,active:true,currency:"IDR",createdAt:now,updatedAt:now,createdBy:interaction.user.id});
+    await audit("product.created",interaction,{productId:String(result.insertedId),category,source:"panel"});
+    await interaction.editReply(v2Payload({content:"Produk berhasil dibuat dalam kategori **"+category+"**. ID: "+result.insertedId,flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
+    return;
+  }
+
+  const id = parts[3] || "";
+  const {ObjectId} = await import("mongodb");
+  if (!ObjectId.isValid(id)) {
+    await interaction.editReply(v2Payload({content:"ID produk tidak valid.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
+    return;
+  }
+  const result = await db.collection("products").updateOne(
+    {_id:new ObjectId(id)},
+    {$set:{name,price,category,emoji,description,updatedAt:new Date(),updatedBy:interaction.user.id}}
+  );
+  if (!result.matchedCount) {
+    await interaction.editReply(v2Payload({content:"Produk tidak ditemukan.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
+    return;
+  }
+  await audit("product.updated",interaction,{productId:id,category,source:"panel"});
+  await interaction.editReply(v2Payload({content:"Produk berhasil diperbarui. Kategori sekarang: **"+category+"**.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
 }
+
 async function catalogData(db) {
   const products = db.collection("products");
   const categories = await products.distinct("category", { active: true });
