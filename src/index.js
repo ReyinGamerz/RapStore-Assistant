@@ -58,7 +58,7 @@ function parseDiscordEmoji(value) {
 }
 function categoryDisplay(category) {
   const name = safeText(category?.name, 80);
-  const match = name.match(/^(<a?:[a-zA-Z0-9_]{2,32}:\\d{17,20}>)\\s*(.*)$/);
+  const match = name.match(/^(<a?:[a-zA-Z0-9_]{2,32}:\d{17,20}>)\s*(.*)$/);
   return { name: match && match[2] ? match[2] : name, emoji: parseDiscordEmoji(category?.emoji) || (match ? parseDiscordEmoji(match[1]) : null) };
 }
 async function synchronizeCategoryData() {
@@ -72,7 +72,7 @@ async function synchronizeCategoryData() {
   const savedCategories = await categories.find({}).toArray();
   for (const record of savedCategories) {
     const display = categoryDisplay(record);
-    if (display.name === record.name && !display.emoji) continue;
+    if (display.name === record.name) continue;
     const cleanName = display.name;
     const emojiText = record.emoji || (display.emoji
       ? "<" + (display.emoji.animated ? "a" : "") + ":" + display.emoji.name + ":" + display.emoji.id + ">"
