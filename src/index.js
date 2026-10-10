@@ -678,7 +678,7 @@ async function handleCatalogSelection(interaction) {
     }
     const reservations = db.collection("ticket_reservations");
     const reservationTime = new Date();
-    await reservations.deleteMany({ createdAt: { $lt: new Date(Date.now() - 5 * 60 * 1000) } });
+    await reservations.deleteMany({ createdAt: { $lt: new Date(Date.now() - 10 * 60 * 1000) } });
     try {
       await reservations.insertOne({ guildId: interaction.guildId, buyerId: interaction.user.id, interactionId: interaction.id, createdAt: reservationTime });
     } catch (error) {
