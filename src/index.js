@@ -718,7 +718,11 @@ async function buildCatalogPayload(selectedCategory = "", selectedProductId = ""
   panel.addActionRowComponents(new ActionRowBuilder().addComponents(categoryMenu));
   panel.addActionRowComponents(new ActionRowBuilder().addComponents(productMenu));
   panel.addActionRowComponents(new ActionRowBuilder().addComponents(ticketMenu));
-  return { flags: MessageFlags.IsComponentsV2, components: [panel] };
+  return {
+    flags: MessageFlags.IsComponentsV2,
+    components: [panel],
+    allowedMentions: { parse: [], users: [], roles: [] },
+  };
 }
 
 async function handleCatalogSelection(interaction) {
