@@ -418,7 +418,13 @@ export async function archiveAndDeleteTicket({ channel, ticket, client, closedBy
         console.error("[ticket-archive-lock]", error?.message || error);
       });
     }
-    await channel.delete("RapStore ticket archived as " + archivedFilename);
+    try {
+      await channel.delete("RapStore ticket archived as " + archivedFilename);
+    } catch (error) {
+      if (Number(error?.code) !== 10003) {
+        throw new Error("TRANSCRIPT_SAVED_CHANNEL_DELETE_FAILED: " + (error?.message || "unknown Discord error"));
+      }
+    }
     return { filename: archivedFilename, messageId: archivedMessage.id, messageCount: messages.length };
   } catch (error) {
     await tickets.updateOne(
@@ -1092,7 +1098,9 @@ export async function handleOrderMessage(message, client) {
       console.error("[ticket-archive-close-command]", error?.message || error);
       await message.channel.send(v2(buildPanel(
         "TRANSCRIPT BELUM TERSIMPAN",
-        "Tiket tidak dihapus karena transcript gagal dikirim. Periksa TRANSCRIPT_CHANNEL_ID serta izin View Channel, Send Messages, Attach Files, dan Manage Channels untuk bot."
+        String(error?.message || "").startsWith("TRANSCRIPT_SAVED_CHANNEL_DELETE_FAILED:")
+          ? "Transcript sudah tersimpan, tetapi bot belum bisa menghapus channel. Periksa izin Manage Channels; maintenance akan mencoba menghapusnya lagi."
+          : "Tiket tidak dihapus karena transcript belum berhasil dipastikan tersimpan. Periksa TRANSCRIPT_CHANNEL_ID serta izin View Channel, Read Message History, Send Messages, Attach Files, dan Manage Channels untuk bot."
       ))).catch(() => {});
     }
     return;
