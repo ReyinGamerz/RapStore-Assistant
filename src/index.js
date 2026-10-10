@@ -766,7 +766,7 @@ async function handleCatalogSelection(interaction) {
     let progressMessage = null;
     const reportProgress = async (title, body) => {
       const payload = { flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral, components: [buildPanel(title, body)] };
-      if (progressMessage) await progressMessage.edit(payload);
+      if (progressMessage) await interaction.webhook.editMessage(progressMessage.id, payload);
       else progressMessage = await interaction.followUp({ ...payload, fetchReply: true });
     };
     try {
