@@ -96,7 +96,7 @@ Command definitions live in `src/commands.js`. The event router is in `src/index
 | AUD-007 | P2 | Medium | MongoDB index initialization | Unique-index creation may fail on production data containing duplicates or incompatible legacy records | BLOCKED — inspect metadata/backup before migration |
 | AUD-008 | P2 | High | Public persistent catalog | Category/product selection edited the shared public message; users could interfere with each other's selection state | FIXED — PENDING LIVE E2E; each user now gets a private catalog copy on first selection |
 | AUD-009 | P2 | High | `src/order-system.js`, `src/index.js` shutdown | Maintenance interval was never cleared and an active run was not awaited before MongoDB closed | FIXED — CI PASS; LIVE SHUTDOWN TEST NOT RUN |
-| AUD-010 | P2 | Medium | Dependencies / CI | Dependency advisories were not checked with `npm audit`; the local environment could not access the registry and no lockfile is present | OPEN — run dependency audit after lockfile/registry access |
+| AUD-010 | P2 | Medium | Dependencies / CI | No committed lockfile means dependency resolution is not reproducible; CI does run the production dependency audit | PARTIALLY MITIGATED — `npm audit --omit=dev --audit-level=high` PASS in CI; reproducibility remains OPEN |
 | AUD-011 | P2 | Medium | `src/order-system.js` vouch modal submit | Vouch deadline was checked on modal open but not rechecked on submit; a late submission could be accepted | FIXED — REGRESSION TEST PASS CI; LIVE FLOW NOT RUN |
 | AUD-012 | P2 | Medium | `src/index.js`, `src/order-system.js` audit logs | Audit log insert errors were swallowed, making audit-trail loss invisible in process logs | FIXED — ERROR LOGGING ADDED; CI PASS; LIVE DB FAILURE NOT SIMULATED |
 | AUD-013 | P3 | Medium | `src/order-system.js` public vouch panel | Buyer-controlled Markdown could alter public testimonial formatting; mention parsing was already disabled | FIXED — ESCAPED TESTIMONIAL TEXT; CI PASS; LIVE DISPLAY NOT TESTED |
@@ -141,9 +141,9 @@ No production Discord server, MongoDB database, or VPS was modified.
 
 | Test | Type | Result | Evidence/notes |
 |---|---|---|---|
-| Existing `test/security.test.js` | Unit | PASS | All unit tests completed successfully in GitHub Actions run [#38048167806](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38048167806) |
-| New `test/ticket-recovery.test.js` | Regression unit | PASS | Added on audit branch and passed in GitHub Actions run [#38048167806](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38048167806) |
-| `npm run check` | Syntax | PASS | `src/ticket-recovery.js` included; all configured `node --check` commands passed in GitHub Actions run [#38048167806](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38048167806) |
+| Existing `test/security.test.js` | Unit | PASS | Unit tests passed in latest source validation run [#38048874980](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38048874980) |
+| New `test/ticket-recovery.test.js` | Regression unit | PASS | Added on audit branch and passed in latest source validation run [#38048874980](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38048874980) |
+| `npm run check` | Syntax | PASS | All configured `node --check` commands passed in latest source validation run [#38048874980](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38048874980) |
 | Maintenance shutdown | Static review | PASS (code review) | Timer clear and active-run wait are wired; no live shutdown test |
 | Vouch deadline | Unit regression | PASS | Boundary tests for before/at/after deadline and invalid dates passed in [CI run #38048815221](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38048815221) |
 | Global command refresh | Discord integration | BLOCKED | Requires real bot token and Discord API |
@@ -153,9 +153,9 @@ No production Discord server, MongoDB database, or VPS was modified.
 
 ## H. Residual risks
 
-- Latest CI run [#38048815221](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38048815221) passed `npm install --ignore-scripts`, production dependency advisory check (`npm audit --omit=dev --audit-level=high`), unit tests, and configured syntax checks. Live behavior and exhaustive security-history checks remain unverified.
+- Latest verified source CI run [#38048874980](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38048874980) passed `npm install --ignore-scripts`, production dependency advisory check (`npm audit --omit=dev --audit-level=high`), unit tests, and configured syntax checks. This threshold check passing means no production dependency advisory at High or Critical severity blocked CI; it is not a full security guarantee. Live behavior and exhaustive security-history checks remain unverified.
 - No package lockfile exists. Dependency versions are not fully reproducible until a lockfile is generated and committed in an environment with registry access.
-- `npm audit`/advisory checks and exhaustive secret scanning of commit history remain unverified.
+- Production dependency advisories were checked at High/Critical threshold in CI; development dependency advisories and exhaustive secret scanning of commit history remain unverified.
 - Global command propagation can take time. Legacy guild command cleanup only covers guilds the bot can currently enumerate.
 - Discord role/channel permissions, Components V2 payloads, transcript uploads, and MongoDB concurrency need controlled live tests.
 - The per-user catalog flow needs a live Discord smoke test to verify the public message remains unchanged and ephemeral interactions update only the invoking user's private copy.
