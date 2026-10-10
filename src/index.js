@@ -649,11 +649,29 @@ async function handleCatalogSelection(interaction) {
         return;
       }
     }
-    const existing = await db.collection("tickets").findOne({
+    // Reconcile active ticket records with Discord before enforcing the one-ticket limit.
+    // Staff may manually delete a channel, bypassing the normal close button.
+    const activeTickets = await db.collection("tickets").find({
       guildId: interaction.guildId,
       buyerId: interaction.user.id,
       status: "open",
-    });
+    }).toArray();
+    let existing = null;
+    for (const activeTicket of activeTickets) {
+      const liveChannel = await interaction.guild.channels.fetch(activeTicket.channelId).catch(() => null);
+      if (liveChannel) {
+        existing ||= activeTicket;
+        continue;
+      }
+      await db.collection("tickets").updateOne(
+        { _id: activeTicket._id, status: "open" },
+        { $set: { status: "deleted", closedAt: new Date(), closeReason: "discord_channel_missing", cleanupAt: new Date() } },
+      );
+      await db.collection("orders").updateMany(
+        { guildId: interaction.guildId, channelId: activeTicket.channelId, status: "ON HOLD" },
+        { $set: { status: "CANCELLED", cancelledAt: new Date(), cancelledBy: interaction.user.id, cancelReason: "ticket_channel_missing", updatedAt: new Date() } },
+      );
+    }
     if (existing) {
       await interaction.followUp(v2Payload({ content: "Lu sudah punya tiket yang masih terbuka: <#" + existing.channelId + ">.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
       return;
