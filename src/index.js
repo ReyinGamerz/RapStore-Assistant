@@ -890,8 +890,10 @@ async function handleCatalogSelection(interaction) {
         }
       } catch (error) {
         await db.collection("tickets").deleteOne({ channelId: channel.id }).catch(error => logError("ticket-create-rollback", error));
-        await db.collection("orders").deleteMany({ channelId: channel.id, status: "ON HOLD" }).catch(() => {});
-        await channel.delete("Failed to initialize catalog ticket").catch(() => {});
+        await db.collection("orders").deleteMany({ channelId: channel.id, status: "ON HOLD" })
+          .catch(error => logError("ticket-create-order-rollback", error));
+        await channel.delete("Failed to initialize catalog ticket")
+          .catch(error => logError("ticket-create-channel-rollback", error));
         throw error;
       }
       await reportProgress("TIKET BERHASIL DIBUAT", "✓ Tiket lu sudah siap: <#" + channel.id + ">.");
