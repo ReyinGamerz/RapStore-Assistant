@@ -1532,8 +1532,7 @@ export async function handleOrderInteraction(interaction, client) {
       if (currentOrder.status === "ON HOLD" && currentOrder.paymentStatus === "rejected") {
         await updatePaymentReviewMessage(interaction, "BUKTI TRANSFER TIDAK VALID",
           "Diperiksa oleh <@" + (currentOrder.reviewedBy || proof.reviewedBy || interaction.user.id) + ">.\n" +
-          "<@" + currentOrder.buyerId + ">, bukti ini tidak valid. Silakan kirim ulang bukti pembayaran yang jelas dan sesuai nominal.
-" +
+          "<@" + currentOrder.buyerId + ">, bukti ini tidak valid. Silakan kirim ulang bukti pembayaran yang jelas dan sesuai nominal.\n" +
           "Status pesanan tetap **ON HOLD**.");
         await markProofTerminal("rejected", currentOrder.reviewedBy || interaction.user.id);
         await refreshOrderMessage(currentOrder, client).catch(error => console.error("[payment-review-order-refresh]", error?.message || error));
@@ -1606,8 +1605,7 @@ export async function handleOrderInteraction(interaction, client) {
 
     await updatePaymentReviewMessage(interaction, "BUKTI TRANSFER TIDAK VALID",
       "Diperiksa oleh <@" + interaction.user.id + ">.\n" +
-      "<@" + order.buyerId + ">, bukti ini tidak valid. Silakan kirim ulang bukti pembayaran yang jelas dan sesuai nominal.
-" +
+      "<@" + order.buyerId + ">, bukti ini tidak valid. Silakan kirim ulang bukti pembayaran yang jelas dan sesuai nominal.\n" +
       "Status pesanan tetap **ON HOLD**.");
     await db.collection("payment_proofs").updateOne({ _id: proof._id, status: "pending" }, {
       $set: { status: "rejected", reviewedAt: now, reviewedBy: interaction.user.id, updatedAt: now },
