@@ -1147,6 +1147,8 @@ async function runOrderMaintenance(client) {
   maintenanceRunning = true;
   try {
     const db = getDatabase();
+    await reconcilePaymentProofStatuses(db, client);
+    await ensurePendingPaymentNotices(client, db);
     await publishPendingVouches(client);
     const staleClosingTickets = await db.collection("tickets").find({
       status: "closing",
@@ -1380,6 +1382,10 @@ export async function handleOrderInteraction(interaction, client) {
     const order = await db.collection("orders").findOne({ _id: new ObjectId(orderId), guildId: interaction.guildId, status: "DONE" });
     if (!order) {
       await replyNotice(interaction, "PESANAN BELUM SELESAI", "Tombol VOUCH hanya berlaku untuk transaksi yang sudah DONE.");
+      return;
+    }
+    if (String(order.channelId) !== String(interaction.channelId)) {
+      await replyNotice(interaction, "TIKET TIDAK SESUAI", "Tombol VOUCH hanya dapat digunakan dari channel tiket transaksi ini.");
       return;
     }
     if (order.buyerId !== interaction.user.id) {
@@ -1631,7 +1637,7 @@ export async function handleOrderInteraction(interaction, client) {
     return;
   }
   const isStaff = staff(interaction.member);
-  if (order.buyerId !== interaction.user.id && !isStaff) {
+  if (!canAccessTicket(order, interaction.user.id, isStaff)) {
     await replyNotice(interaction, "AKSES DITOLAK", "Hanya pemilik tiket atau Founder/Admin yang dapat mengubah pesanan ini.");
     return;
   }
