@@ -30,4 +30,11 @@ export const config = {
   },
   vouchChannelId: optionalId("VOUCH_CHANNEL_ID"),
   transcriptChannelId: optionalId("TRANSCRIPT_CHANNEL_ID"),
+  cloudStorage: {
+    r2AccountId: optionalId("R2_ACCOUNT_ID"),
+    r2AccessKeyId: optionalId("R2_ACCESS_KEY_ID"),
+    r2SecretAccessKey: optionalId("R2_SECRET_ACCESS_KEY"),
+    r2BucketName: optionalId("R2_BUCKET_NAME"),
+    r2PublicBaseUrl: optionalId("R2_PUBLIC_BASE_URL").replace(/\\/$/, ""),
+  },
 };
