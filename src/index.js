@@ -5,15 +5,18 @@ import {
   TextInputStyle,
 } from "discord.js";
 import { randomBytes } from "node:crypto";
+import { ObjectId } from "mongodb";
 import { config } from "./config.js";
 import { connectDatabase, closeDatabase, getDatabase } from "./database.js";
 import { refreshGlobalCommands } from "./global-commands.js";
 import { buildMessage, buildComponentsOnly, buildPanel } from "./ui.js";
 import { isStaffMember, canAccessTicket, canManuallyCloseTicket } from "./security.js";
+import { reconcileMissingTicket } from "./ticket-recovery.js";
 import { allocateTicketNumber, initializeOrderTicket, handleOrderInteraction, handleOrderMessage, archiveAndDeleteTicket, startOrderMaintenance } from "./order-system.js";
 
 let client;
 let shuttingDown = false;
+let stopOrderMaintenance;
 const EPHEMERAL = MessageFlags.Ephemeral;
 const productPickerCache = new Map();
 const categoryPickerCache = new Map();
@@ -23,8 +26,23 @@ function v2Payload(payload) {
   return buildMessage(payload?.content ?? "", { ephemeral: Boolean(flags & MessageFlags.Ephemeral) });
 }
 function v2EditPayload(content) { return buildComponentsOnly(content); }
-function v2SendPayload(content) { return buildMessage(content); }
 function logError(context, error) { console.error(`[${context}]`, error instanceof Error ? error.message : "Unknown error"); }
+async function fetchChannelOrNull(discordClient, channelId) {
+  try {
+    return await discordClient.channels.fetch(channelId);
+  } catch (error) {
+    if (Number(error?.code) === 10003) return null;
+    throw error;
+  }
+}
+async function fetchMessageOrNull(channel, messageId) {
+  try {
+    return await channel.messages.fetch(messageId);
+  } catch (error) {
+    if ([10003, 10008].includes(Number(error?.code))) return null;
+    throw error;
+  }
+}
 function hasStaffRole(member) {
   return isStaffMember(member, [config.ids.founderRole, config.ids.adminRole]);
 }
@@ -228,8 +246,8 @@ async function upsertPersistentPanel(interaction, type, payload) {
   let record = await collection.findOne({ guildId: interaction.guildId, type });
   let message = null;
   if (record) {
-    const channel = await client.channels.fetch(record.channelId).catch(() => null);
-    if (channel) message = await channel.messages.fetch(record.messageId).catch(() => null);
+    const channel = await fetchChannelOrNull(client, record.channelId);
+    if (channel?.messages) message = await fetchMessageOrNull(channel, record.messageId);
     if (message) await message.edit(payload);
   }
   if (!message) {
@@ -272,12 +290,12 @@ async function refreshPersistentPanels(readyClient, onlyType = null) {
     try {
       // Remove old public management panels left by versions that exposed /panel.
       if (record.type === "panel") {
-        const oldChannel = await readyClient.channels.fetch(record.channelId).catch(() => null);
+        const oldChannel = await fetchChannelOrNull(readyClient, record.channelId);
         if (!oldChannel?.messages) {
           console.error("[persistent-panel] Cannot access legacy public panel channel; keeping cleanup record to retry.");
           continue;
         }
-        const oldMessage = await oldChannel.messages.fetch(record.messageId).catch(() => null);
+        const oldMessage = await fetchMessageOrNull(oldChannel, record.messageId);
         if (oldMessage) {
           try {
             await oldMessage.delete();
@@ -292,12 +310,12 @@ async function refreshPersistentPanels(readyClient, onlyType = null) {
         continue;
       }
       const payload = record.type === "catalog"
-        ? await buildCatalogPayload(record.selectedCategory || "", record.selectedProductId || "")
+        ? await buildCatalogPayload("", "")
         : null;
       if (!payload) continue;
-      const channel = await readyClient.channels.fetch(record.channelId).catch(() => null);
+      const channel = await fetchChannelOrNull(readyClient, record.channelId);
       if (!channel || typeof channel.send !== "function") { console.error("[persistent-panel] Saved channel unavailable for " + record.type); continue; }
-      let message = await channel.messages.fetch(record.messageId).catch(() => null);
+      let message = await fetchMessageOrNull(channel, record.messageId);
       if (message) {
         await message.edit(payload);
       } else {
@@ -385,7 +403,6 @@ async function handleFounderPanelButton(interaction) {
   if (action === "confirmdeletecategory") {
     const categoryId = parts[3] || "";
     await interaction.deferUpdate();
-    const {ObjectId}=await import("mongodb");
     if (!ObjectId.isValid(categoryId)) { await interaction.editReply(v2Payload({content:"Kategori tidak valid.",flags:EPHEMERAL|MessageFlags.IsComponentsV2})); return; }
     const categoryRecord = await db.collection("categories").findOne({_id:new ObjectId(categoryId)});
     if (!categoryRecord) { await interaction.editReply(v2Payload({content:"Kategori tidak ditemukan atau sudah dihapus.",flags:EPHEMERAL|MessageFlags.IsComponentsV2})); return; }
@@ -404,7 +421,6 @@ async function handleFounderPanelButton(interaction) {
   if (action === "confirmdeleteproduct") {
     const id = parts[3] || "";
     await interaction.deferUpdate();
-    const {ObjectId}=await import("mongodb");
     if (!ObjectId.isValid(id)) { await interaction.editReply(v2Payload({content:"ID produk tidak valid.",flags:EPHEMERAL|MessageFlags.IsComponentsV2})); return; }
     const product = await db.collection("products").findOne({_id:new ObjectId(id)});
     if (!product) { await interaction.editReply(v2Payload({content:"Produk tidak ditemukan atau sudah dihapus.",flags:EPHEMERAL|MessageFlags.IsComponentsV2})); return; }
@@ -463,7 +479,6 @@ async function handleFounderPanelSelect(interaction) {
     ));
     return;
   }
-  const {ObjectId} = await import("mongodb");
   if (mode === "editproduct") {
     const id = interaction.values[0];
     if (!ObjectId.isValid(id)) {
@@ -534,7 +549,6 @@ async function handleFounderPanelModal(interaction) {
     }
 
     const reference = parts[4] || "";
-    const {ObjectId} = await import("mongodb");
     const isIdReference = reference.startsWith("id-") || ObjectId.isValid(reference);
     const idReference = reference.startsWith("id-") ? reference.slice(3) : reference;
     const encodedName = reference.startsWith("name-") ? reference.slice(5) : reference;
@@ -596,7 +610,6 @@ async function handleFounderPanelModal(interaction) {
   }
 
   const id = parts[3] || "";
-  const {ObjectId} = await import("mongodb");
   if (!ObjectId.isValid(id)) {
     await interaction.editReply(v2Payload({content:"ID produk tidak valid.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
     return;
@@ -720,60 +733,103 @@ async function buildCatalogPayload(selectedCategory = "", selectedProductId = ""
   panel.addActionRowComponents(new ActionRowBuilder().addComponents(categoryMenu));
   panel.addActionRowComponents(new ActionRowBuilder().addComponents(productMenu));
   panel.addActionRowComponents(new ActionRowBuilder().addComponents(ticketMenu));
-  return { flags: MessageFlags.IsComponentsV2, components: [panel] };
+  return {
+    flags: MessageFlags.IsComponentsV2,
+    components: [panel],
+    allowedMentions: { parse: [], users: [], roles: [] },
+  };
 }
 
 async function handleCatalogSelection(interaction) {
-  await interaction.deferUpdate();
-  const db = getDatabase();
-  const panels = db.collection("persistent_panels");
-  if (interaction.customId === "rapstore:catalog:category") {
-    const category = safeText(interaction.values[0], 80);
-    await panels.updateOne({ guildId: interaction.guildId, type: "catalog" }, { $set: { selectedCategory: category, selectedProductId: "", updatedAt: new Date() } });
-    await interaction.message.edit(await buildCatalogPayload(category, ""));
+  if (!interaction.inGuild()) {
+    await interaction.reply(v2Payload({
+      content: "Katalog hanya bisa digunakan di server Discord.",
+      flags: EPHEMERAL | MessageFlags.IsComponentsV2,
+    }));
     return;
   }
+
+  const db = getDatabase();
+  // Public catalog interactions create a private copy so one member's choices
+  // cannot change the selections currently displayed to every other member.
+  const fromPublicCatalog = !interaction.message.flags.has(MessageFlags.Ephemeral);
+
+  if (interaction.customId === "rapstore:catalog:category") {
+    const category = safeText(interaction.values[0], 80);
+    if (fromPublicCatalog) {
+      await interaction.deferReply({ flags: EPHEMERAL | MessageFlags.IsComponentsV2 });
+    } else {
+      await interaction.deferUpdate();
+    }
+    await interaction.editReply(await buildCatalogPayload(category, ""));
+    return;
+  }
+
   if (interaction.customId === "rapstore:catalog:product") {
-    const id = interaction.values[0];
+    const id = String(interaction.values[0] || "");
+    if (fromPublicCatalog) {
+      await interaction.deferReply({ flags: EPHEMERAL | MessageFlags.IsComponentsV2 });
+    } else {
+      await interaction.deferUpdate();
+    }
     if (id === "none") {
-      await interaction.followUp(v2Payload({ content: "Pilih kategori terlebih dahulu, lalu pilih produk.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
+      const payload = v2Payload({
+        content: "Pilih kategori terlebih dahulu, lalu pilih produk.",
+        flags: EPHEMERAL | MessageFlags.IsComponentsV2,
+      });
+      if (fromPublicCatalog) await interaction.editReply(payload);
+      else await interaction.followUp(payload);
       return;
     }
-    const { ObjectId } = await import("mongodb");
     if (!ObjectId.isValid(id)) {
-      await interaction.followUp(v2Payload({ content: "Produk tidak valid. Silakan pilih ulang.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
+      const payload = v2Payload({
+        content: "Produk tidak valid. Silakan pilih ulang.",
+        flags: EPHEMERAL | MessageFlags.IsComponentsV2,
+      });
+      if (fromPublicCatalog) await interaction.editReply(payload);
+      else await interaction.followUp(payload);
       return;
     }
     const product = await db.collection("products").findOne({ _id: new ObjectId(id), active: true });
     if (!product) {
-      await interaction.followUp(v2Payload({ content: "Produk tidak ditemukan atau sudah tidak aktif. Silakan pilih ulang.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
+      const payload = v2Payload({
+        content: "Produk tidak ditemukan atau sudah tidak aktif. Silakan pilih ulang.",
+        flags: EPHEMERAL | MessageFlags.IsComponentsV2,
+      });
+      if (fromPublicCatalog) await interaction.editReply(payload);
+      else await interaction.followUp(payload);
       return;
     }
     const category = safeText(product.category || "Umum", 80);
-    await panels.updateOne({ guildId: interaction.guildId, type: "catalog" }, { $set: { selectedCategory: category, selectedProductId: id, updatedAt: new Date() } });
-    await interaction.message.edit(await buildCatalogPayload(category, id));
+    await interaction.editReply(await buildCatalogPayload(category, id));
     return;
   }
+
   if (interaction.customId === "rapstore:catalog:ticket") {
+    await interaction.deferUpdate();
     const [ticketType, selectedProductId] = String(interaction.values[0] || "").split(":");
     if (!["order_now", "product_question"].includes(ticketType)) {
-      await interaction.followUp(v2Payload({ content: "Tujuan tiket tidak valid. Silakan pilih ulang.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
+      await interaction.followUp(v2Payload({
+        content: "Tujuan tiket tidak valid. Silakan pilih ulang.",
+        flags: EPHEMERAL | MessageFlags.IsComponentsV2,
+      }));
       return;
     }
-    if (!interaction.inGuild()) {
-      await interaction.followUp(v2Payload({ content: "Tiket hanya bisa dibuat di server Discord.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
-      return;
-    }
-    const { ObjectId } = await import("mongodb");
     let selectedProduct = null;
     if (selectedProductId) {
       if (!ObjectId.isValid(selectedProductId)) {
-        await interaction.followUp(v2Payload({ content: "Produk tidak valid. Pilih produk dari katalog lalu coba lagi.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
+        await interaction.followUp(v2Payload({
+          content: "Produk tidak valid. Pilih produk dari katalog lalu coba lagi.",
+          flags: EPHEMERAL | MessageFlags.IsComponentsV2,
+        }));
         return;
       }
       selectedProduct = await db.collection("products").findOne({ _id: new ObjectId(selectedProductId), active: true });
       if (!selectedProduct) {
-        await interaction.followUp(v2Payload({ content: "Produk sudah tidak tersedia. Perbarui katalog lalu coba lagi.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
+        await interaction.followUp(v2Payload({
+          content: "Produk sudah tidak tersedia. Perbarui katalog lalu coba lagi.",
+          flags: EPHEMERAL | MessageFlags.IsComponentsV2,
+        }));
         return;
       }
     }
@@ -784,7 +840,10 @@ async function handleCatalogSelection(interaction) {
       await reservations.insertOne({ guildId: interaction.guildId, buyerId: interaction.user.id, interactionId: interaction.id, createdAt: reservationTime });
     } catch (error) {
       if (error?.code === 11000) {
-        await interaction.followUp(v2Payload({ content: "Permintaan tiket lu sedang diproses. Tunggu sebentar lalu cek daftar tiket sebelum mencoba lagi.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
+        await interaction.followUp(v2Payload({
+          content: "Permintaan tiket lu sedang diproses. Tunggu sebentar lalu cek daftar tiket sebelum mencoba lagi.",
+          flags: EPHEMERAL | MessageFlags.IsComponentsV2,
+        }));
         return;
       }
       throw error;
@@ -804,28 +863,12 @@ async function handleCatalogSelection(interaction) {
         try { liveChannel = await interaction.guild.channels.fetch(activeTicket.channelId); }
         catch (error) { if (Number(error?.code) === 10003) liveChannel = null; else throw error; }
         if (liveChannel) { existing ||= activeTicket; continue; }
-        await db.collection("tickets").updateOne(
-          { _id: activeTicket._id, status: "open" },
-          { $set: { status: "deleted", closedAt: missingAt, closeReason: "discord_channel_missing", cleanupAt: missingAt, transcriptStatus: "unavailable" } },
-        );
-        const missingAt = new Date();
-        await db.collection("orders").updateMany(
-          { guildId: interaction.guildId, channelId: activeTicket.channelId, status: "ON HOLD" },
-          { $set: { status: "CANCELLED", paymentStatus: "cancelled", cancelledAt: missingAt, cancelledBy: interaction.user.id, cancelReason: "ticket_channel_missing", updatedAt: missingAt } },
-        );
-        await db.collection("payment_proofs").updateMany(
-          { guildId: interaction.guildId, channelId: activeTicket.channelId, status: "pending" },
-          { $set: { status: "superseded", supersededAt: missingAt, supersededReason: "ticket_channel_missing", updatedAt: missingAt }, $unset: { reviewSendingAt: "" } },
-        );
-        await db.collection("orders").updateMany(
-          { guildId: interaction.guildId, channelId: activeTicket.channelId, status: "PROSES", ticketClosedAt: { $exists: false } },
-          { $set: { ticketCloseBlockedAt: missingAt, ticketCloseBlockedReason: "channel_missing_before_archive", ticketChannelMissingAt: missingAt, transcriptStatus: "unavailable", updatedAt: missingAt }, $unset: { closeProcessingAt: "" } },
-        );
-        // Keep DONE orders eligible for their one-time vouch publication even if their channel vanished.
-        await db.collection("orders").updateMany(
-          { guildId: interaction.guildId, channelId: activeTicket.channelId, status: "DONE", ticketClosedAt: { $exists: false } },
-          { $set: { ticketChannelMissingAt: missingAt, transcriptStatus: "unavailable", updatedAt: missingAt }, $unset: { closeProcessingAt: "" } },
-        );
+        await reconcileMissingTicket({
+          db,
+          guildId: interaction.guildId,
+          activeTicket,
+          actorId: interaction.user.id,
+        });
       }
       if (existing) {
         await reportProgress("TIKET SUDAH ADA", "Lu sudah punya tiket yang masih terbuka: <#" + existing.channelId + ">. Selesaikan tiket itu sebelum membuat tiket baru.");
@@ -853,7 +896,7 @@ async function handleCatalogSelection(interaction) {
           status: "open", createdAt: new Date(),
         });
         if (isOrder) {
-          await initializeOrderTicket({ channel, interaction, ticketNumber: ticketNumber.number, ticketId: ticketInsert.insertedId, ticketCode, selectedProduct });
+          await initializeOrderTicket({ channel, interaction, ticketId: ticketInsert.insertedId, ticketCode, selectedProduct });
         } else {
           const productLine = selectedProduct ? "\nProduk yang dipilih: **" + safeText(selectedProduct.name, 100) + "**" : "\nProduk belum dipilih dari katalog.";
           const intro = "Halo <@" + interaction.user.id + ">! Silakan tulis pertanyaan produk lu di sini.";
@@ -862,9 +905,11 @@ async function handleCatalogSelection(interaction) {
           await channel.send({ flags: MessageFlags.IsComponentsV2, components: [ticketWelcome] });
         }
       } catch (error) {
-        await db.collection("tickets").deleteOne({ channelId: channel.id }).catch(() => {});
-        await db.collection("orders").deleteMany({ channelId: channel.id, status: "ON HOLD" }).catch(() => {});
-        await channel.delete("Failed to initialize catalog ticket").catch(() => {});
+        await db.collection("tickets").deleteOne({ channelId: channel.id }).catch(error => logError("ticket-create-rollback", error));
+        await db.collection("orders").deleteMany({ channelId: channel.id, status: "ON HOLD" })
+          .catch(error => logError("ticket-create-order-rollback", error));
+        await channel.delete("Failed to initialize catalog ticket")
+          .catch(error => logError("ticket-create-channel-rollback", error));
         throw error;
       }
       await reportProgress("TIKET BERHASIL DIBUAT", "✓ Tiket lu sudah siap: <#" + channel.id + ">.");
@@ -991,6 +1036,7 @@ async function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`Received ${signal}; shutting down.`);
+  try { await stopOrderMaintenance?.(); } catch (error) { logError("maintenance-shutdown", error); process.exitCode = 1; }
   client?.destroy();
   try { await closeDatabase(); } catch (error) { logError("shutdown", error); process.exitCode = 1; }
 }
@@ -1067,7 +1113,7 @@ async function main() {
         guildId: guildId || tickets[0].guildId,
         details: { channelId: channel.id, ticketIds: tickets.map(ticket => String(ticket._id)), reason: "channel_deleted_in_discord", transcriptStatus: "unavailable" },
         createdAt: now,
-      }).catch(() => {});
+      }).catch(error => console.error("[audit-log-write]", error?.message || error));
       console.warn("[tickets] Unexpectedly deleted open ticket channel; records preserved and cleanup metadata updated:", channel.id);
     })().catch(error => logError("ticket-channel-delete-cleanup", error));
   });
@@ -1078,13 +1124,15 @@ async function main() {
     console.log(`Logged in as ${readyClient.user.tag}; MongoDB Atlas ready.`);
     void refreshPersistentPanels(readyClient).catch(error => logError("persistent-panel-startup-sync", error));
   });
+  const ready = new Promise(resolve => client.once(Events.ClientReady, resolve));
   await client.login(config.discordToken);
-  startOrderMaintenance(client);
+  const readyClient = client.isReady() ? client : await ready;
+  stopOrderMaintenance = startOrderMaintenance(client);
   try {
-    await refreshGlobalCommands();
+    await refreshGlobalCommands({ guildIds: [...readyClient.guilds.cache.keys()] });
   } catch (error) {
     logError("global-command-refresh", error);
-    console.error("Bot tetap berjalan, tetapi slash command guild belum berhasil diperbarui. Periksa DISCORD_GUILD_ID dan jalankan npm run commands:refresh setelah memperbaiki error.");
+    console.error("Bot tetap berjalan, tetapi refresh global slash commands atau pembersihan command guild lama belum selesai. Periksa izin aplikasi bot dan jalankan npm run commands:refresh lagi.");
   }
 }
 

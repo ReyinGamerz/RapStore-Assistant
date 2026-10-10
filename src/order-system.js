@@ -28,6 +28,7 @@ import {
   canAccessTicket,
   escapeDiscordMarkdown,
   expectedProofStatus,
+  isVouchWindowExpired,
 } from "./security.js";
 
 const V2 = MessageFlags.IsComponentsV2;
@@ -751,7 +752,7 @@ async function cancelActiveOrdersForTicket({ guildId, channelId, actorId, client
       guildId,
       details: { orderId: String(candidate._id), orderCode: candidate.orderCode, channelId, reason },
       createdAt: now,
-    }).catch(() => {});
+    }).catch(error => console.error("[audit-log-write]", error?.message || error));
   }
 
   return { cancelled, activeOrders };
@@ -791,7 +792,7 @@ async function markOrderDone(order, actorId, channel, client) {
   await getDatabase().collection("audit_logs").insertOne({
     action: "order.completed", actorId, guildId: order.guildId,
     details: { orderId: String(order._id), orderCode: order.orderCode, autoCloseAt }, createdAt: new Date(),
-  }).catch(() => {});
+  }).catch(error => console.error("[audit-log-write]", error?.message || error));
   return updated;
 }
 
@@ -1254,7 +1255,7 @@ async function publishPendingVouches(client) {
       const rating = Math.max(1, Math.min(5, Number(vouch.rating) || 5));
       const stars = "★".repeat(rating) + "☆".repeat(5 - rating);
       const message = clean(vouch.message || "vouch otomatis setelah 1 jam.", 700).replace(/\r/g, "");
-      const quotedMessage = message.split("\n").map(line => "> " + line).join("\n");
+      const quotedMessage = message.split("\n").map(line => "> " + escapeDiscordMarkdown(line)).join("\n");
       const date = new Date(vouch.createdAt || Date.now()).toLocaleDateString("en-GB", {
         timeZone: "Asia/Jakarta", day: "2-digit", month: "short", year: "numeric",
       }).toUpperCase();
@@ -1281,7 +1282,7 @@ async function publishPendingVouches(client) {
       divider(panel);
       panel.addTextDisplayComponents(new TextDisplayBuilder().setContent(
         "**CLIENT**\n<@" + vouch.buyerId + ">\n\n" +
-        "**PRODUCT**\n" + clean(vouch.productName || "Produk RapStore", 100) + "\n\n" +
+        "**PRODUCT**\n" + escapeDiscordMarkdown(clean(vouch.productName || "Produk RapStore", 100)) + "\n\n" +
         "**RATING**\n" + stars + " (" + rating + "/5)\n\n" +
         "**PESAN & KESAN**\n" + quotedMessage,
       ));
@@ -1497,13 +1498,26 @@ async function runOrderMaintenance(client) {
 }
 
 export function startOrderMaintenance(client) {
-  const run = () => void runOrderMaintenance(client).catch(error => console.error("[order-maintenance]", error?.message || error));
-  run();
-  const timer = setInterval(run, 30_000);
+  let stopped = false;
+  let activeRun = null;
+  const run = () => {
+    if (stopped || activeRun) return activeRun;
+    activeRun = runOrderMaintenance(client)
+      .catch(error => console.error("[order-maintenance]", error?.message || error))
+      .finally(() => { activeRun = null; });
+    return activeRun;
+  };
+  void run();
+  const timer = setInterval(() => { void run(); }, 30_000);
   timer.unref?.();
+  return async () => {
+    stopped = true;
+    clearInterval(timer);
+    if (activeRun) await activeRun;
+  };
 }
 
-export async function initializeOrderTicket({ channel, interaction, ticketNumber, ticketId, ticketCode, selectedProduct }) {
+export async function initializeOrderTicket({ channel, interaction, ticketId, ticketCode, selectedProduct }) {
   const db = getDatabase();
   const product = selectedProduct && selectedProduct.active !== false ? selectedProduct : null;
   const unitPrice = product ? Number(product.price || 0) : 0;
@@ -1532,7 +1546,7 @@ export async function initializeOrderTicket({ channel, interaction, ticketNumber
     action: "order.created", actorId: interaction.user.id, guildId: interaction.guildId,
     details: { orderId: String(result.insertedId), orderCode, channelId: channel.id, ticketId: String(ticketId) },
     createdAt: new Date(),
-  }).catch(() => {});
+  }).catch(error => console.error("[audit-log-write]", error?.message || error));
   await channel.send(v2(buildPanel(
     "INFO PESANAN",
     "Pilih kategori, produk, dan jumlah pada panel PESANAN. Setelah totalnya benar, pilih QRIS atau BANK. Jangan pernah mengirim password atau kode OTP.",
@@ -1576,7 +1590,7 @@ export async function handleOrderInteraction(interaction, client) {
         await replyNotice(interaction, "VOUCH SUDAH DICATAT", "Satu transaksi hanya dapat mengirim satu testimoni.");
         return;
       }
-      if (order.autoCloseAt && new Date(order.autoCloseAt).getTime() <= Date.now()) {
+      if (isVouchWindowExpired(order)) {
         await replyNotice(interaction, "WAKTU VOUCH HABIS", "Batas pengiriman testimoni sudah lewat. Sistem akan menerbitkan vouch otomatis.");
         return;
       }
@@ -1597,6 +1611,11 @@ export async function handleOrderInteraction(interaction, client) {
     if (action === "submit" && interaction.isModalSubmit()) {
       if (existingVouch) {
         await replyNotice(interaction, "VOUCH SUDAH DICATAT", "Testimoni untuk transaksi ini sudah tercatat.");
+        return;
+      }
+      // Re-check the deadline on submission, not only when the modal is opened.
+      if (isVouchWindowExpired(order)) {
+        await replyNotice(interaction, "WAKTU VOUCH HABIS", "Batas pengiriman testimoni sudah lewat. Sistem akan menerbitkan vouch otomatis.");
         return;
       }
       const rating = Number(interaction.fields.getTextInputValue("rating").trim());
@@ -1711,7 +1730,7 @@ export async function handleOrderInteraction(interaction, client) {
           action: "payment.verified", actorId: currentOrder.reviewedBy || proof.reviewedBy || interaction.user.id, guildId: interaction.guildId,
           details: { orderId: String(currentOrder._id), proofId: String(proof._id), orderCode: currentOrder.orderCode },
           createdAt: new Date(),
-        }).catch(() => {});
+        }).catch(error => console.error("[audit-log-write]", error?.message || error));
         return true;
       }
       if (currentOrder.status === "ON HOLD" && currentOrder.paymentStatus === "rejected") {
@@ -1725,7 +1744,7 @@ export async function handleOrderInteraction(interaction, client) {
           action: "payment.rejected", actorId: currentOrder.reviewedBy || proof.reviewedBy || interaction.user.id, guildId: interaction.guildId,
           details: { orderId: String(currentOrder._id), proofId: String(proof._id), orderCode: currentOrder.orderCode },
           createdAt: new Date(),
-        }).catch(() => {});
+        }).catch(error => console.error("[audit-log-write]", error?.message || error));
         return true;
       }
       return false;
@@ -1784,7 +1803,7 @@ export async function handleOrderInteraction(interaction, client) {
         action: "payment.verified", actorId: interaction.user.id, guildId: interaction.guildId,
         details: { orderId: String(order._id), proofId: String(proof._id), orderCode: order.orderCode },
         createdAt: new Date(),
-      }).catch(() => {});
+      }).catch(error => console.error("[audit-log-write]", error?.message || error));
       return;
     }
 
@@ -1800,7 +1819,7 @@ export async function handleOrderInteraction(interaction, client) {
       action: "payment.rejected", actorId: interaction.user.id, guildId: interaction.guildId,
       details: { orderId: String(order._id), proofId: String(proof._id), orderCode: order.orderCode },
       createdAt: new Date(),
-    }).catch(() => {});
+    }).catch(error => console.error("[audit-log-write]", error?.message || error));
     return;
   }
 
@@ -1872,7 +1891,7 @@ export async function handleOrderInteraction(interaction, client) {
     await db.collection("audit_logs").insertOne({
       action: "order.cancelled", actorId: interaction.user.id, guildId: interaction.guildId,
       details: { orderId: String(order._id), orderCode: order.orderCode, channelId: order.channelId }, createdAt: new Date(),
-    }).catch(() => {});
+    }).catch(error => console.error("[audit-log-write]", error?.message || error));
     return;
   }
   if (customId === "rapstore:order:done") {
@@ -1958,7 +1977,7 @@ export async function handleOrderInteraction(interaction, client) {
     await db.collection("audit_logs").insertOne({
       action: "payment.method_selected", actorId: interaction.user.id, guildId: interaction.guildId,
       details: { orderId: String(order._id), orderCode: order.orderCode, method }, createdAt: new Date(),
-    }).catch(() => {});
+    }).catch(error => console.error("[audit-log-write]", error?.message || error));
     return;
   }
 
@@ -2031,7 +2050,7 @@ export async function handleOrderInteraction(interaction, client) {
       action: "order.updated", actorId: interaction.user.id, guildId: interaction.guildId,
       details: { orderId: String(order._id), orderCode: order.orderCode, category: updated.category, productId: updated.productId, amount: updated.amount, totalPrice: updated.totalPrice },
       createdAt: new Date(),
-    }).catch(() => {});
+    }).catch(error => console.error("[audit-log-write]", error?.message || error));
   }
 }
 
@@ -2159,5 +2178,5 @@ export async function handleOrderMessage(message, client) {
     action: "payment.proof_submitted", actorId: message.author.id, guildId: message.guild.id,
     details: { orderId: String(order._id), orderCode: order.orderCode, proofId: String(proofResult.insertedId), attachmentCount: attachments.length },
     createdAt: new Date(),
-  }).catch(() => {});
+  }).catch(error => console.error("[audit-log-write]", error?.message || error));
 }

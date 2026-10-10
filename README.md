@@ -11,20 +11,18 @@ Discord digital-store bot built with Node.js, discord.js v14, MongoDB Atlas, and
 For an existing checkout:
 ```bash
 cd ~/RapStore-Assistant
-git pull origin main
+git pull
 npm install
-npm test
-npm run check
-npm run commands:refresh
 npm start
 ```
 
-For a new install, run `npm install`, copy `.env.example` to `.env`, then set `DISCORD_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_GUILD_ID`, and `MONGODB_URI`. The guild ID is required for guild-scoped slash commands. Never commit or share `.env`. If the bot is managed by PM2, restart the existing process rather than starting a duplicate instance.
+For a new install, run `npm install`, copy `.env.example` to `.env`, then set `DISCORD_TOKEN`, `DISCORD_CLIENT_ID`, and `MONGODB_URI`. Slash commands are registered globally; `DISCORD_GUILD_ID` is not used. Never commit or share `.env`. If the bot is managed by PM2, restart the existing process rather than starting a duplicate instance.
 
 ## Active commands
 - `/catalog` — Founder/Admin-only command to create or sync the public catalog message. Members use the public catalog message itself.
 - `/panel` — Founder/Admin-only, private (ephemeral) management panel. It never posts a new public management panel.
-- Slash commands are registered for `DISCORD_GUILD_ID`; `npm run commands:refresh` also removes legacy global registrations. Runtime role checks deny members even if an old command is still cached by Discord.
+- Slash commands are registered globally without `DISCORD_GUILD_ID`. On startup, the bot refreshes global commands and attempts to remove legacy guild-scoped copies from every server it can currently enumerate. Runtime role checks remain authoritative even if Discord temporarily caches old command metadata.
+- `npm start` automatically runs `npm test` and `npm run check` first; startup stops if either fails. Run `npm run commands:refresh` only when you want to refresh commands manually without starting the full bot.
 - The bot refreshes the saved public catalog on startup and removes any legacy public management-panel message recorded by older versions. Catalog data is refreshed after product/category changes made through the private `/panel`.
 - Ticket creation shows a temporary “TIKET SEDANG DIBUAT” status before reporting success or failure.
 - **Edit product:** selecting a product opens its edit form directly. Change the category by entering the exact name of an existing category; new or misspelled category names are rejected.
@@ -77,7 +75,7 @@ QRIS and bank details are not bundled in the repository. If the corresponding co
 - Payment-proof uploads are limited to five attachments and 15 MB total per message. Conditional MongoDB updates prevent payment/order controls from overwriting a proof already submitted.
 - Transcript generation is capped at 2,000 messages and 100 MB total attachment size. If a ticket exceeds either limit, archival stops and the original ticket channel is retained for manual review.
 - The built-in `Umum` category is protected in both the confirmation UI and the final deletion handler.
-- Run `npm test` and `npm run check` before deploying. These tests cover proof-attachment validation; they do not replace a live Discord/MongoDB integration test.
+- Startup runs `npm test` and `npm run check` before connecting the bot. Tests are automated unit/static checks and do not replace a live Discord/MongoDB integration test.
 - The bot needs permission to manage channels and channel permission overwrites in the configured support category. For transcript archival/recovery, it also needs View Channel, Read Message History, Send Messages, and Attach Files in `TRANSCRIPT_CHANNEL_ID`.
 - Configure `FOUNDER_ROLE_ID` and `ADMIN_ROLE_ID` for the intended roles.
 - The bot uses the `GuildMessages` and privileged `MessageContent` intents to detect order-ticket attachments. Enable **Message Content Intent** in the Discord Developer Portal, or proof attachments may not be visible to the bot.
