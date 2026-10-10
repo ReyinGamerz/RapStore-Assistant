@@ -28,6 +28,7 @@ import {
   canAccessTicket,
   escapeDiscordMarkdown,
   expectedProofStatus,
+  isVouchWindowExpired,
 } from "./security.js";
 
 const V2 = MessageFlags.IsComponentsV2;
@@ -1254,7 +1255,7 @@ async function publishPendingVouches(client) {
       const rating = Math.max(1, Math.min(5, Number(vouch.rating) || 5));
       const stars = "★".repeat(rating) + "☆".repeat(5 - rating);
       const message = clean(vouch.message || "vouch otomatis setelah 1 jam.", 700).replace(/\r/g, "");
-      const quotedMessage = message.split("\n").map(line => "> " + line).join("\n");
+      const quotedMessage = message.split("\n").map(line => "> " + escapeDiscordMarkdown(line)).join("\n");
       const date = new Date(vouch.createdAt || Date.now()).toLocaleDateString("en-GB", {
         timeZone: "Asia/Jakarta", day: "2-digit", month: "short", year: "numeric",
       }).toUpperCase();
@@ -1281,7 +1282,7 @@ async function publishPendingVouches(client) {
       divider(panel);
       panel.addTextDisplayComponents(new TextDisplayBuilder().setContent(
         "**CLIENT**\n<@" + vouch.buyerId + ">\n\n" +
-        "**PRODUCT**\n" + clean(vouch.productName || "Produk RapStore", 100) + "\n\n" +
+        "**PRODUCT**\n" + escapeDiscordMarkdown(clean(vouch.productName || "Produk RapStore", 100)) + "\n\n" +
         "**RATING**\n" + stars + " (" + rating + "/5)\n\n" +
         "**PESAN & KESAN**\n" + quotedMessage,
       ));
@@ -1589,7 +1590,7 @@ export async function handleOrderInteraction(interaction, client) {
         await replyNotice(interaction, "VOUCH SUDAH DICATAT", "Satu transaksi hanya dapat mengirim satu testimoni.");
         return;
       }
-      if (order.autoCloseAt && new Date(order.autoCloseAt).getTime() <= Date.now()) {
+      if (isVouchWindowExpired(order)) {
         await replyNotice(interaction, "WAKTU VOUCH HABIS", "Batas pengiriman testimoni sudah lewat. Sistem akan menerbitkan vouch otomatis.");
         return;
       }
@@ -1610,6 +1611,11 @@ export async function handleOrderInteraction(interaction, client) {
     if (action === "submit" && interaction.isModalSubmit()) {
       if (existingVouch) {
         await replyNotice(interaction, "VOUCH SUDAH DICATAT", "Testimoni untuk transaksi ini sudah tercatat.");
+        return;
+      }
+      // Re-check the deadline on submission, not only when the modal is opened.
+      if (isVouchWindowExpired(order)) {
+        await replyNotice(interaction, "WAKTU VOUCH HABIS", "Batas pengiriman testimoni sudah lewat. Sistem akan menerbitkan vouch otomatis.");
         return;
       }
       const rating = Number(interaction.fields.getTextInputValue("rating").trim());
