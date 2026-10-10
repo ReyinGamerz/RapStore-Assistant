@@ -896,7 +896,29 @@ async function handleTicketButton(interaction) {
     await interaction.reply(v2Payload({content:"Hanya pembuat tiket atau Founder/Admin yang dapat menutup tiket ini.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
     return;
   }
+  const getOrderCloseBlock = async () => {
+    const order = await db.collection("orders").findOne({
+      guildId: interaction.guildId,
+      channelId: interaction.channelId,
+    });
+    if (!order || order.status === "CANCELLED") return "";
+    if (order.status === "ON HOLD") {
+      return "Pesanan masih **ON HOLD**. Batalkan pesanan melalui tombol **Batalkan Pesanan** terlebih dahulu; tiket tidak akan dihapus selama pesanan masih aktif.";
+    }
+    if (order.status === "PROSES") {
+      return "Pesanan sedang **PROSES**. Selesaikan dengan **Tandai DONE** setelah pekerjaan selesai. Jika benar-benar harus membatalkan, Founder/Admin dapat menggunakan **!close** untuk membatalkan dan mengarsipkan pesanan secara eksplisit.";
+    }
+    if (order.status === "DONE") {
+      return "Pesanan sudah **DONE**. Gunakan tombol **VOUCH** atau tunggu proses vouch otomatis; tiket tidak boleh dihapus sebelum alur vouch dan transcript selesai.";
+    }
+    return "Status pesanan belum aman untuk menutup tiket. Periksa pesanan bersama Founder/Admin.";
+  };
   if (interaction.customId === "rapstore:ticket:close") {
+    const closeBlock = await getOrderCloseBlock();
+    if (closeBlock) {
+      await interaction.reply(v2Payload({content:closeBlock,flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
+      return;
+    }
     const confirm = buildPanel("KONFIRMASI TUTUP TIKET","Yakin ingin menutup tiket ini? Channel akan dikunci dan ditandai sebagai selesai.");
     confirm.addActionRowComponents(new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId("rapstore:ticket:confirmclose").setLabel("Ya, Tutup Tiket").setStyle(ButtonStyle.Danger),
@@ -915,6 +937,11 @@ async function handleTicketButton(interaction) {
     const freshTicket = await db.collection("tickets").findOne({guildId:interaction.guildId,channelId:interaction.channelId,status:"open"});
     if (!freshTicket) {
       await interaction.editReply(v2Payload({content:"Tiket sudah ditutup sebelumnya.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
+      return;
+    }
+    const closeBlock = await getOrderCloseBlock();
+    if (closeBlock) {
+      await interaction.editReply(v2Payload({content:closeBlock,flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
       return;
     }
     try {
