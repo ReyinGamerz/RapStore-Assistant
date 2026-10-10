@@ -22,4 +22,10 @@ export const config = {
     adminRole: optionalId("ADMIN_ROLE_ID", "1549942317249593425"),
     supportCategory: optionalId("SUPPORT_CATEGORY_ID", "1552879597601820732"),
   },
+  payments: {
+    qrisImageUrl: optionalId("PAYMENT_QRIS_IMAGE_URL"),
+    bankName: optionalId("PAYMENT_BANK_NAME"),
+    bankAccountName: optionalId("PAYMENT_BANK_ACCOUNT_NAME"),
+    bankAccountNumber: optionalId("PAYMENT_BANK_ACCOUNT_NUMBER"),
+  },
 };
