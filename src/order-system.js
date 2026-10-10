@@ -233,16 +233,76 @@ function buildPaymentInstruction(order, method, payment) {
   return v2(container);
 }
 
-async function refreshOrderMessage(order, client) {
-  if (!order?.orderMessageId) return;
-  const guild = await client.guilds.fetch(order.guildId).catch(() => null);
-  if (!guild) return;
-  const channel = await guild.channels.fetch(order.channelId).catch(() => null);
-  if (!channel) return;
-  const message = await channel.messages.fetch(order.orderMessageId).catch(() => null);
-  if (message) await message.edit(await buildOrderPanel(order));
+function buildOrderLog(order) {
+  const container = new ContainerBuilder();
+  const date = new Date(order.createdAt || Date.now()).toLocaleDateString("en-GB", { timeZone: "Asia/Jakarta", day: "2-digit", month: "2-digit", year: "numeric" });
+  const amount = Number(order.amount || 1).toLocaleString("id-ID");
+  const total = Number(order.totalPrice || 0).toLocaleString("id-ID");
+  const tick = String.fromCharCode(96);
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent("# RAPSTORE — ORDER LOGS\n## STATUS: " + tick + clean(order.status || "ON HOLD", 30) + tick));
+  divider(container);
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
+    "<:people:1549409947215728690> **Buyer**\n" +
+    "<:alur:1553800809198649344> <@" + clean(order.buyerId, 30) + ">\n\n" +
+    "<:box:1551492070051553290> **Jenis Product**\n" +
+    "<:alur:1553800809198649344> " + tick + clean(order.productName || "Belum dipilih", 100) + tick + "\n\n" +
+    "<a:bintang:1558403940977082448> **Jumlah**\n" +
+    "<:alur:1553800809198649344> " + tick + amount + tick + "\n\n" +
+    "<:uang:1552535412579508325> **Harga**\n" +
+    "<:alur:1553800809198649344> " + tick + total + tick + "\n\n" +
+    "<a:jam:1549673401881333841> **Date**\n" +
+    "<:alur:1553800809198649344> " + tick + date + tick + "\n\n" +
+    "**Order ID**\n<:alur:1553800809198649344> " + tick + clean(order.orderCode || "", 40) + tick
+  ));
+  return v2(container);
 }
 
+async function refreshOrderLog(order, client) {
+  const logChannelId = clean(config.orderLogChannelId, 30);
+  if (!logChannelId || !order || order.ticketType === "product_question") return;
+  const channel = await client.channels.fetch(logChannelId).catch(() => null);
+  if (!channel || typeof channel.send !== "function") { console.error("[order-log] ORDER_LOG_CHANNEL_ID is not a sendable channel."); return; }
+  if (order.orderLogMessageId && order.orderLogChannelId === logChannelId) {
+    const existing = await channel.messages.fetch(order.orderLogMessageId).catch(() => null);
+    if (existing) { await existing.edit({ ...buildOrderLog(order), allowedMentions: { parse: [], users: [], roles: [] } }); return; }
+  }
+  const message = await channel.send({ ...buildOrderLog(order), allowedMentions: { parse: [], users: [], roles: [] } });
+  const orders = getDatabase().collection("orders");
+  const filter = order.orderLogMessageId
+    ? { _id: order._id, orderLogMessageId: order.orderLogMessageId, orderLogChannelId: order.orderLogChannelId }
+    : { _id: order._id, $or: [{ orderLogMessageId: { $exists: false } }, { orderLogMessageId: null }] };
+  const saved = await orders.updateOne(filter, { $set: { orderLogMessageId: message.id, orderLogChannelId: logChannelId, updatedAt: new Date() } });
+  if (!saved.modifiedCount) {
+    const latest = await orders.findOne({ _id: order._id });
+    if (latest?.orderLogMessageId) {
+      await message.delete().catch(() => {});
+      if (latest.orderLogChannelId === logChannelId) {
+        const winner = await channel.messages.fetch(latest.orderLogMessageId).catch(() => null);
+        if (winner) await winner.edit({ ...buildOrderLog(latest), allowedMentions: { parse: [], users: [], roles: [] } }).catch(() => {});
+      }
+      order.orderLogMessageId = latest.orderLogMessageId;
+      order.orderLogChannelId = latest.orderLogChannelId;
+      return;
+    }
+  }
+  order.orderLogMessageId = message.id;
+  order.orderLogChannelId = logChannelId;
+}
+
+async function refreshOrderMessage(order, client) {
+  if (!order) return;
+  if (order.orderMessageId) {
+    const guild = await client.guilds.fetch(order.guildId).catch(() => null);
+    if (guild) {
+      const channel = await guild.channels.fetch(order.channelId).catch(() => null);
+      if (channel) {
+        const message = await channel.messages.fetch(order.orderMessageId).catch(() => null);
+        if (message) await message.edit(await buildOrderPanel(order));
+      }
+    }
+  }
+  await refreshOrderLog(order, client).catch(error => console.error("[order-log]", error?.message || error));
+}
 function buildDonePanel(order, vouchSubmitted = false) {
   const panel = buildPanel("PESANAN SELESAI",
     "Pesanan **" + clean(order.orderCode, 40) + "** sudah berstatus **DONE**.\n" +
@@ -388,6 +448,12 @@ function transcriptMessageText(message) {
   return text;
 }
 
+function encodeInvisibleMarker(value) {
+  const bytes = Buffer.from(String(value || ""), "utf8");
+  let encoded = "\u2063";
+  for (const byte of bytes) encoded += byte.toString(2).padStart(8, "0").replace(/0/g, "\u200b").replace(/1/g, "\u200c");
+  return encoded + "\u2063";
+}
 function transcriptSuffix() {
   let value = "";
   while (value.length < 5) value += randomBytes(8).toString("base64url").replace(/[^a-zA-Z0-9]/g, "");
@@ -676,6 +742,28 @@ export async function archiveAndDeleteTicket({ channel, ticket, client, closedBy
   }
 }
 
+async function closeOrderTicketAfterVouch(order, client, closedBy = "system") {
+  const db = getDatabase();
+  if (order.ticketClosedAt) return true;
+  const ticket = await db.collection("tickets").findOne({ guildId: order.guildId, channelId: order.channelId });
+  if (!ticket) throw new Error("Data tiket tidak ditemukan; tiket dipertahankan untuk pemeriksaan manual.");
+  const guild = await client.guilds.fetch(order.guildId);
+  const channel = await guild.channels.fetch(order.channelId).catch(error => { if (Number(error?.code) === 10003) return null; throw error; });
+  if (!channel) {
+    if (ticket.status === "closed" && ticket.transcriptFileName) {
+      await db.collection("orders").updateOne({ _id: order._id }, { $set: { ticketClosedAt: new Date(), updatedAt: new Date() }, $unset: { closeProcessingAt: "" } });
+      return true;
+    }
+    throw new Error("Channel tiket tidak ditemukan sebelum transcript terverifikasi.");
+  }
+  if (ticket.status === "closed" && ticket.transcriptFileName) {
+    await channel.delete("RapStore ticket already archived after vouch").catch(error => { if (Number(error?.code) !== 10003) throw error; });
+  } else {
+    await archiveAndDeleteTicket({ channel, ticket, client, closedBy, reason: "customer_vouch_submitted_auto_close" });
+  }
+  await db.collection("orders").updateOne({ _id: order._id }, { $set: { ticketClosedAt: new Date(), updatedAt: new Date() }, $unset: { closeProcessingAt: "" } });
+  return true;
+}
 async function publishPendingVouches(client) {
   const db = getDatabase();
   const pending = await db.collection("vouches").find({
@@ -699,12 +787,13 @@ async function publishPendingVouches(client) {
       if (!channel || typeof channel.send !== "function") throw new Error("VOUCH_CHANNEL_ID is not a sendable channel.");
       const rating = Math.max(1, Math.min(5, Number(vouch.rating) || 5));
       const stars = "★".repeat(rating) + "☆".repeat(5 - rating);
-      const message = clean(vouch.message || "vouch otomatis setelah 1 jam. (ini jika user ga send vouch)", 700).replace(/\r/g, "");
+      const message = clean(vouch.message || "vouch otomatis setelah 1 jam.", 700).replace(/\r/g, "");
       const quotedMessage = message.split("\n").map(line => "> " + line).join("\n");
-      const date = new Date(vouch.createdAt || Date.now()).toLocaleDateString("id-ID", {
-        timeZone: "Asia/Jakarta", day: "numeric", month: "long", year: "numeric",
-      });
+      const date = new Date(vouch.createdAt || Date.now()).toLocaleDateString("en-GB", {
+        timeZone: "Asia/Jakarta", day: "2-digit", month: "short", year: "numeric",
+      }).toUpperCase();
       const marker = "RAP-VOUCH-KEY:" + clean(vouch.orderCode || "legacy", 40);
+      const hiddenMarker = encodeInvisibleMarker(marker);
       let existingMessage = null;
       let before;
       // A Discord send can succeed while the database write fails. Search recent archive history before retrying.
@@ -713,7 +802,7 @@ async function publishPendingVouches(client) {
         if (!recent.size) break;
         existingMessage = recent.find(candidate => {
           try {
-            return JSON.stringify(candidate.components.map(component => component.toJSON?.() ?? component)).includes(marker);
+            return JSON.stringify(candidate.components.map(component => component.toJSON?.() ?? component)).includes(hiddenMarker);
           } catch {
             return false;
           }
@@ -725,15 +814,16 @@ async function publishPendingVouches(client) {
       panel.addTextDisplayComponents(new TextDisplayBuilder().setContent("## RAP — CUSTOMER TESTIMONI\n-# VERIFIED TRANSACTION"));
       divider(panel);
       panel.addTextDisplayComponents(new TextDisplayBuilder().setContent(
-        "**CLIENT**\n<@" + vouch.buyerId + ">\n\n**PRODUCT**\n" + clean(vouch.productName || "Produk RapStore", 100),
+        "**CLIENT**\n<@" + vouch.buyerId + ">\n\n" +
+        "**PRODUCT**\n" + clean(vouch.productName || "Produk RapStore", 100) + "\n\n" +
+        "**RATING**\n" + stars + " (" + rating + "/5)\n\n" +
+        "**PESAN & KESAN**\n" + quotedMessage,
       ));
       divider(panel);
-      panel.addTextDisplayComponents(new TextDisplayBuilder().setContent(
-        "**RATING**\n" + stars + " (" + rating + "/5)\n\n**PESAN & KESAN**\n" + quotedMessage,
-      ));
+      panel.addTextDisplayComponents(new TextDisplayBuilder().setContent("> Thank you for trusting **RAP**."));
       divider(panel);
       panel.addTextDisplayComponents(new TextDisplayBuilder().setContent(
-        "> Thank you for trusting **RapStore**.\n\n-# Trusted. Fast. Secure. Professional.\n-# RAP TESTIMONI • " + date + "\n-# " + marker,
+        "-# Trusted. Fast. Secure. Professional.\n-# RAP TESTIMONI • " + date + hiddenMarker,
       ));
       const sent = existingMessage || await channel.send({
         flags: V2, components: [panel],
@@ -826,7 +916,9 @@ async function runOrderMaintenance(client) {
     }
     const now = new Date();
     const dueOrders = await db.collection("orders").find({
-      status: "DONE", autoCloseAt: { $lte: now }, ticketClosedAt: { $exists: false },
+      status: "DONE",
+      $or: [{ autoCloseAt: { $lte: now } }, { vouchPublishedAt: { $exists: true } }],
+      ticketClosedAt: { $exists: false },
       ticketCloseBlockedAt: { $exists: false },
     }).sort({ autoCloseAt: 1 }).limit(20).toArray();
     for (const candidate of dueOrders) {
@@ -922,6 +1014,7 @@ export async function initializeOrderTicket({ channel, interaction, ticketNumber
   });
   order.orderMessageId = orderMessage.id;
   order.paymentMessageId = paymentMessage.id;
+  await refreshOrderLog(order, interaction.client).catch(error => console.error("[order-log]", error?.message || error));
   await db.collection("audit_logs").insertOne({
     action: "order.created", actorId: interaction.user.id, guildId: interaction.guildId,
     details: { orderId: String(result.insertedId), orderCode, channelId: channel.id, ticketId: String(ticketId) },
@@ -995,6 +1088,7 @@ export async function handleOrderInteraction(interaction, client) {
         await replyNotice(interaction, "TESTIMONI TIDAK VALID", "Rating harus angka 1–5 dan pesan tidak boleh kosong.");
         return;
       }
+      await interaction.deferReply({ flags: V2 | EPHEMERAL });
       try {
         await db.collection("vouches").insertOne({
           orderId: String(order._id), orderCode: order.orderCode, guildId: order.guildId,
@@ -1003,18 +1097,22 @@ export async function handleOrderInteraction(interaction, client) {
         });
       } catch (error) {
         if (error?.code !== 11000) throw error;
-        await replyNotice(interaction, "VOUCH SUDAH DICATAT", "Testimoni untuk transaksi ini sudah tercatat.");
+        await interaction.editReply(v2(buildPanel("VOUCH SUDAH DICATAT", "Testimoni untuk transaksi ini sudah tercatat."), true));
         return;
       }
       await publishPendingVouches(client);
       const savedVouch = await db.collection("vouches").findOne({ orderId: String(order._id) });
-      await replyNotice(
-        interaction,
-        savedVouch?.status === "published" ? "VOUCH TERKIRIM" : "VOUCH TERSIMPAN",
-        savedVouch?.status === "published"
-          ? "Terima kasih! Testimoni lu sudah dikirim ke channel testimoni RapStore."
-          : "Testimoni tersimpan. Bot akan mencoba mengirimkannya kembali otomatis setelah channel vouch tersedia.",
-      );
+      if (savedVouch?.status === "published") {
+        try {
+          await closeOrderTicketAfterVouch(order, client, interaction.user.id);
+          await interaction.editReply(v2(buildPanel("VOUCH TERKIRIM — TIKET DITUTUP", "Terima kasih! Testimoni sudah dipublikasikan. Transcript HTML sudah dibuat dan tiket otomatis ditutup."), true));
+        } catch (error) {
+          console.error("[vouch-auto-close]", error?.message || error);
+          await interaction.editReply(v2(buildPanel("VOUCH TERKIRIM — PENUTUPAN DIULANG OTOMATIS", "Testimoni sudah dipublikasikan. Transcript atau penghapusan channel belum selesai, jadi bot akan mencoba lagi otomatis. Channel tidak dihapus sebelum transcript tersimpan."), true));
+        }
+      } else {
+        await interaction.editReply(v2(buildPanel("VOUCH TERSIMPAN", "Testimoni tersimpan, tetapi belum berhasil dipublikasikan. Bot akan mencoba kembali otomatis; tiket baru ditutup setelah vouch dan transcript berhasil diproses."), true));
+      }
       return;
     }
     await replyNotice(interaction, "AKSI VOUCH TIDAK DIKENAL", "Buka tombol VOUCH pada tiket transaksi dan coba lagi.");
@@ -1155,6 +1253,7 @@ export async function handleOrderInteraction(interaction, client) {
       return;
     }
     const updated = await db.collection("orders").findOne({ _id: order._id });
+    await refreshOrderLog(updated, client).catch(error => console.error("[order-log]", error?.message || error));
     await interaction.update(v2(buildPanel("PESANAN DIBATALKAN", "Status pesanan **" + clean(order.orderCode, 40) + "** berubah menjadi **CANCELLED**. Tiket akan diarsipkan sebagai transcript.")));
     const channel = interaction.channel;
     if (order.orderMessageId) {
@@ -1324,6 +1423,7 @@ export async function handleOrderInteraction(interaction, client) {
     }
     const updated = await db.collection("orders").findOne({ _id: order._id });
     await interaction.update(await buildOrderPanel(updated));
+    await refreshOrderLog(updated, client).catch(error => console.error("[order-log]", error?.message || error));
     if (previousPaymentMethod && order.paymentMessageId) {
       const paymentMessage = await interaction.channel.messages.fetch(order.paymentMessageId).catch(() => null);
       if (paymentMessage) await paymentMessage.edit(buildPaymentPicker()).catch(() => {});
@@ -1375,6 +1475,10 @@ export async function handleOrderMessage(message, client) {
           updatedAt: new Date(),
         },
       });
+      for (const activeOrder of activeOrders) {
+        const cancelledOrder = await db.collection("orders").findOne({ _id: activeOrder._id });
+        await refreshOrderLog(cancelledOrder, client).catch(error => console.error("[order-log]", error?.message || error));
+      }
       await db.collection("payment_proofs").updateMany({
         orderId: { $in: orderIds },
         status: "pending",

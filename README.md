@@ -19,8 +19,10 @@ npm start
 For a new install, run `npm install`, copy `.env.example` to `.env`, then set `DISCORD_TOKEN`, `DISCORD_CLIENT_ID`, and `MONGODB_URI`. Never commit or share `.env`. Global slash command changes can take time to appear in Discord.
 
 ## Active commands
-- `/catalog` — private interactive catalog, separated per user.
-- `/panel` — private Founder/Admin panel for category and product management.
+- `/catalog` — public interactive catalog message, intended for the catalog channel.
+- `/panel` — public persistent Founder/Admin management panel; only Founder/Admin can use its controls.
+- The bot stores each server’s catalog/panel message and refreshes them on startup so existing messages use the latest code. Catalog data is also refreshed after category/product changes made through `/panel`.
+- Ticket creation shows a temporary “TIKET SEDANG DIBUAT” status before reporting success or failure.
 - **Edit product:** selecting a product opens its edit form directly. Change the category by entering the exact name of an existing category; new or misspelled category names are rejected.
 - **Delete product:** available from the panel and requires confirmation.
 - **Delete category:** requires confirmation and deletes all products assigned to that category as well. The built-in `Umum` category cannot be deleted.
@@ -48,8 +50,9 @@ For a new install, run `npm install`, copy `.env.example` to `.env`, then set `D
 - Order tickets create a MongoDB order record and a Components V2 panel with category, product, amount (1–25), unit price, total price, and status. Total price is recalculated when a selection changes.
 - Order statuses: `ON HOLD`, `PROSES`, `DONE`, and `CANCELLED`. Cancelling is available while the order is `ON HOLD` and requires confirmation. The bot archives a transcript before deleting the ticket. Once processing starts, cancellation is disabled.
 - Founder/Admin can mark an order `DONE` using the button or `!done` in the order ticket, after it reaches `PROSES`.
-- Marking an order `DONE` adds a `VOUCH` button. The buyer can submit a 1–5 rating and a message; the bot publishes one Components V2 customer-testimonial panel to `VOUCH_CHANNEL_ID`. If no vouch is submitted within one hour, a 5/5 automatic vouch is published.
-- One hour after `DONE`, the bot publishes/ensures the vouch exists, uploads the ticket transcript immediately before closing, then deletes the order ticket channel. The scheduled job retries after restarts and temporary configuration/permission failures; a ticket is not deleted if the transcript cannot be uploaded.
+- Marking an order `DONE` adds a `VOUCH` button. The buyer can submit a 1–5 rating and a message; the bot publishes one Components V2 customer-testimonial panel to `VOUCH_CHANNEL_ID`. If no vouch is submitted within one hour, a 5/5 automatic vouch with the text `vouch otomatis setelah 1 jam.` is published.
+- After a buyer vouch is successfully published, the bot immediately creates the HTML transcript and closes/deletes that order ticket. If no vouch is submitted, the same archive-and-close flow runs after the one-hour automatic vouch. The scheduled job retries after restarts and temporary configuration/permission failures; a ticket is not deleted if the transcript cannot be uploaded.
+- Order tickets create/update a Components V2 order log in `ORDER_LOG_CHANNEL_ID` with status, buyer, product, quantity, total price, date, and order ID. Consultation (`tanya-*`) tickets do not create order logs.
 
 ## Manual payment configuration
 Set these values in the local `.env` file after confirming the store's actual payment details:
@@ -59,6 +62,7 @@ Set these values in the local `.env` file after confirming the store's actual pa
 - `PAYMENT_BANK_ACCOUNT_NUMBER` — account number.
 - `VOUCH_CHANNEL_ID` — Discord text channel where customer testimonials are published.
 - `TRANSCRIPT_CHANNEL_ID` — Discord text channel where image attachments are copied first and the HTML ticket transcript is archived before the original ticket channel is deleted. No external cloud-storage credentials are required.
+- `ORDER_LOG_CHANNEL_ID` — Discord text channel where order-only status logs are posted and updated.
 
 QRIS and bank details are not bundled in the repository. If the corresponding configuration is empty, the bot refuses to display payment instructions rather than inventing payment details. After transfer, the buyer can attach a proof file in the order ticket. Founder/Admin receives a Components V2 verification panel with `PROSES` and `TIDAK VALID` actions. Accepting a proof marks payment verified and moves the order to `PROSES`; rejecting it asks the buyer to resend proof. Manual proof review does not automatically verify funds with a bank or payment provider.
 

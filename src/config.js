@@ -30,4 +30,5 @@ export const config = {
   },
   vouchChannelId: optionalId("VOUCH_CHANNEL_ID"),
   transcriptChannelId: optionalId("TRANSCRIPT_CHANNEL_ID"),
+  orderLogChannelId: optionalId("ORDER_LOG_CHANNEL_ID"),
 };
