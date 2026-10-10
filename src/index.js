@@ -903,7 +903,7 @@ async function createCatalogOrderTicket(interaction, selectedProductId) {
       else progressMessage = await interaction.followUp({ ...payload, fetchReply: true });
     };
     try {
-      await reportProgress("TIKET SEDANG DIBUAT", "Permintaan lu sedang diproses. Tunggu sebentar ya — jangan klik dropdown berulang kali.");
+      await reportProgress("TIKET SEDANG DIBUAT", "Permintaan lu sedang diproses. Tunggu sebentar ya — jangan tekan tombol konfirmasi berulang kali.");
       const activeTickets = await db.collection("tickets").find({ guildId: interaction.guildId, buyerId: interaction.user.id, status: "open" }).toArray();
       let existing = null;
       for (const activeTicket of activeTickets) {
