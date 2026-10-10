@@ -99,3 +99,12 @@ test("reconciles interrupted payment review from authoritative order state", () 
   assert.equal(expectedProofStatus({ ...proof, status: "accepted" }, { latestProofId: "proof-1", status: "PROSES", paymentStatus: "verified" }), null);
   assert.equal(expectedProofStatus(proof, null), "superseded");
 });
+
+test("vouch deadline is rechecked at submission and fails closed for invalid dates", () => {
+  const now = Date.parse("2026-10-10T12:00:00.000Z");
+  assert.equal(isVouchWindowExpired({}, now), false);
+  assert.equal(isVouchWindowExpired({ autoCloseAt: "2026-10-10T12:01:00.000Z" }, now), false);
+  assert.equal(isVouchWindowExpired({ autoCloseAt: "2026-10-10T12:00:00.000Z" }, now), true);
+  assert.equal(isVouchWindowExpired({ autoCloseAt: "2026-10-10T11:59:00.000Z" }, now), true);
+  assert.equal(isVouchWindowExpired({ autoCloseAt: "not-a-date" }, now), true);
+});
