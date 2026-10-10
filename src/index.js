@@ -977,7 +977,7 @@ async function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`Received ${signal}; shutting down.`);
-  stopOrderMaintenance?.();
+  try { await stopOrderMaintenance?.(); } catch (error) { logError("maintenance-shutdown", error); process.exitCode = 1; }
   client?.destroy();
   try { await closeDatabase(); } catch (error) { logError("shutdown", error); process.exitCode = 1; }
 }
