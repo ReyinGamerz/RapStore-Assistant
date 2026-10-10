@@ -136,6 +136,13 @@ function encodeCategory(category) { return Buffer.from(category, "utf8").toStrin
 function decodeCategory(encoded) { try { return Buffer.from(encoded, "base64url").toString("utf8"); } catch { return ""; } }
 async function showCategoryPicker(interaction, mode, productId = "", responseMode = "reply") {
   const categories = await getProductCategories();
+  if (!categories.length) {
+    const payload = v2Payload({content:"Belum ada kategori. Tambahkan kategori terlebih dahulu sebelum membuat produk.",flags:EPHEMERAL|MessageFlags.IsComponentsV2});
+    if (responseMode === "editReply") await interaction.editReply(payload);
+    else if (responseMode === "followUp") await interaction.followUp(payload);
+    else await interaction.reply(payload);
+    return;
+  }
   const menu = new StringSelectMenuBuilder()
     .setCustomId("rapstore:panelchoose:" + mode + (productId ? ":" + productId : ""))
     .setPlaceholder("Pilih kategori")
