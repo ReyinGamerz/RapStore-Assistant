@@ -9,7 +9,7 @@ import { config } from "./config.js";
 import { connectDatabase, closeDatabase, getDatabase } from "./database.js";
 import { refreshGlobalCommands } from "./global-commands.js";
 import { buildMessage, buildComponentsOnly, buildPanel } from "./ui.js";
-import { isStaffMember, canAccessTicket } from "./security.js";
+import { isStaffMember, canAccessTicket, canManuallyCloseTicket } from "./security.js";
 import { allocateTicketNumber, initializeOrderTicket, handleOrderInteraction, handleOrderMessage, archiveAndDeleteTicket, startOrderMaintenance } from "./order-system.js";
 
 let client;
@@ -901,7 +901,7 @@ async function handleTicketButton(interaction) {
       guildId: interaction.guildId,
       channelId: interaction.channelId,
     });
-    if (!order || order.status === "CANCELLED") return "";
+    if (canManuallyCloseTicket(order)) return "";
     if (order.status === "ON HOLD") {
       return "Pesanan masih **ON HOLD**. Batalkan pesanan melalui tombol **Batalkan Pesanan** terlebih dahulu; tiket tidak akan dihapus selama pesanan masih aktif.";
     }
