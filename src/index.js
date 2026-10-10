@@ -649,11 +649,29 @@ async function handleCatalogSelection(interaction) {
         return;
       }
     }
-    const existing = await db.collection("tickets").findOne({
+    // Reconcile active ticket records with Discord before enforcing the one-ticket limit.
+    // Staff may manually delete a channel, bypassing the normal close button.
+    const activeTickets = await db.collection("tickets").find({
       guildId: interaction.guildId,
       buyerId: interaction.user.id,
       status: "open",
-    });
+    }).toArray();
+    let existing = null;
+    for (const activeTicket of activeTickets) {
+      const liveChannel = await interaction.guild.channels.fetch(activeTicket.channelId).catch(() => null);
+      if (liveChannel) {
+        existing ||= activeTicket;
+        continue;
+      }
+      await db.collection("tickets").updateOne(
+        { _id: activeTicket._id, status: "open" },
+        { $set: { status: "deleted", closedAt: new Date(), closeReason: "discord_channel_missing", cleanupAt: new Date() } },
+      );
+      await db.collection("orders").updateMany(
+        { guildId: interaction.guildId, channelId: activeTicket.channelId, status: "ON HOLD" },
+        { $set: { status: "CANCELLED", cancelledAt: new Date(), cancelledBy: interaction.user.id, cancelReason: "ticket_channel_missing", updatedAt: new Date() } },
+      );
+    }
     if (existing) {
       await interaction.followUp(v2Payload({ content: "Lu sudah punya tiket yang masih terbuka: <#" + existing.channelId + ">.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
       return;
@@ -824,6 +842,33 @@ async function main() {
         if (Number(replyError?.code) !== 10062 && replyError?.code !== "Unknown interaction") logError("interaction-error-response", replyError);
       }
     });
+  });
+  client.on(Events.GuildChannelDelete, channel => {
+    void (async () => {
+      const db = getDatabase();
+      const tickets = await db.collection("tickets").find({
+        channelId: channel.id,
+        status: "open",
+      }).toArray();
+      if (!tickets.length) return;
+      const now = new Date();
+      await db.collection("tickets").updateMany(
+        { channelId: channel.id, status: "open" },
+        { $set: { status: "deleted", closedAt: now, closeReason: "discord_channel_deleted", cleanupAt: now } },
+      );
+      await db.collection("orders").updateMany(
+        { channelId: channel.id, status: "ON HOLD" },
+        { $set: { status: "CANCELLED", cancelledAt: now, cancelledBy: channel.client.user.id, cancelReason: "ticket_channel_deleted", updatedAt: now } },
+      );
+      await db.collection("audit_logs").insertOne({
+        action: "ticket.channel_deleted",
+        actorId: null,
+        guildId: channel.guild?.id || tickets[0].guildId,
+        details: { channelId: channel.id, ticketIds: tickets.map(ticket => String(ticket._id)), reason: "channel_deleted_in_discord" },
+        createdAt: now,
+      }).catch(() => {});
+      console.log("[tickets] Cleaned up " + tickets.length + " ticket record(s) for deleted channel " + channel.id + ".");
+    })().catch(error => logError("ticket-channel-delete-cleanup", error));
   });
   client.on(Events.MessageCreate, message => {
     void handleOrderMessage(message, client).catch(error => logError("order-message", error));
