@@ -60,7 +60,7 @@ export function validateProofAttachments(attachments) {
 export function expectedProofStatus(proof, order) {
   if (!proof || proof.status !== "pending") return null;
   if (!order || String(order.latestProofId || "") !== String(proof._id || "")) return "superseded";
-  if (order.status === "PROSES" && order.paymentStatus === "verified") return "accepted";
+  if (["PROSES", "DONE"].includes(order.status) && order.paymentStatus === "verified") return "accepted";
   if (order.status === "ON HOLD" && order.paymentStatus === "rejected") return "rejected";
   if (order.status === "ON HOLD" && order.paymentStatus === "pending_review") return "pending";
   return "superseded";
