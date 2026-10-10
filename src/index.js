@@ -839,7 +839,7 @@ async function createCatalogOrderTicket(interaction, selectedProductId) {
     let progressMessage = interaction.message || null;
     const reportProgress = async (title, body) => {
       const payload = { flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral, components: [buildPanel(title, body)] };
-      if (progressMessage) await interaction.webhook.editMessage(progressMessage.id, payload);
+      if (progressMessage) await interaction.editReply(payload);
       else progressMessage = await interaction.followUp({ ...payload, fetchReply: true });
     };
     try {
