@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   canAccessTicket,
+  canManuallyCloseTicket,
   escapeDiscordMarkdown,
   isStaffMember,
   validateProofAttachments,
@@ -70,6 +71,15 @@ test("ticket access is restricted to its owner or verified staff", () => {
   assert.equal(canAccessTicket(ticket, "another-user", false), false);
   assert.equal(canAccessTicket(null, "buyer-1", true), false);
   assert.equal(canAccessTicket(ticket, "", true), false);
+});
+
+test("active order tickets cannot bypass payment, completion, or vouch lifecycle", () => {
+  assert.equal(canManuallyCloseTicket(null), true);
+  assert.equal(canManuallyCloseTicket({ status: "CANCELLED" }), true);
+  assert.equal(canManuallyCloseTicket({ status: "ON HOLD" }), false);
+  assert.equal(canManuallyCloseTicket({ status: "PROSES" }), false);
+  assert.equal(canManuallyCloseTicket({ status: "DONE" }), false);
+  assert.equal(canManuallyCloseTicket({ status: "UNKNOWN" }), false);
 });
 
 test("escapes user-controlled Markdown syntax in file names", () => {
