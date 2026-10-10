@@ -20,6 +20,7 @@ import { ObjectId } from "mongodb";
 import { config } from "./config.js";
 import { getDatabase } from "./database.js";
 import { buildPanel } from "./ui.js";
+import { MAX_TRANSCRIPT_MESSAGES, MAX_TRANSCRIPT_ATTACHMENT_BYTES, validateProofAttachments } from "./security.js";
 
 const V2 = MessageFlags.IsComponentsV2;
 const EPHEMERAL = MessageFlags.Ephemeral;
@@ -508,8 +509,15 @@ export async function archiveAndDeleteTicket({ channel, ticket, client, closedBy
       const batch = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
       if (!batch.size) break;
       messages.push(...batch.values());
+      if (messages.length > MAX_TRANSCRIPT_MESSAGES) {
+        throw new Error("Transcript melebihi batas aman " + MAX_TRANSCRIPT_MESSAGES + " pesan. Channel dipertahankan; arsip perlu ditinjau manual.");
+      }
       before = batch.last().id;
       if (batch.size < 100) break;
+    }
+    const totalAttachmentBytes = messages.reduce((total, item) => total + [...(item.attachments?.values?.() || [])].reduce((sum, attachment) => sum + Math.max(0, Number(attachment.size) || 0), 0), 0);
+    if (totalAttachmentBytes > MAX_TRANSCRIPT_ATTACHMENT_BYTES) {
+      throw new Error("Total lampiran transcript melebihi batas aman 100 MB. Channel dipertahankan; arsip perlu ditinjau manual.");
     }
     messages.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
     const baseName = clean(ticket.ticketPrefix && Number.isInteger(ticket.ticketNumber)
@@ -1018,7 +1026,9 @@ export async function handleOrderInteraction(interaction, client) {
         { orderId: String(order._id), _id: { $ne: proof._id }, status: "pending" },
         { $set: { status: "superseded", updatedAt: new Date() } },
       );
-      const orderUpdate = await db.collection("orders").updateOne({ _id: order._id, status: "ON HOLD" }, {
+      const orderUpdate = await db.collection("orders").updateOne({
+        _id: order._id, status: "ON HOLD", paymentStatus: "pending_review", latestProofId: String(proof._id),
+      }, {
         $set: { status: "PROSES", paymentStatus: "verified", paidAt: new Date(), reviewedBy: interaction.user.id, updatedAt: new Date() },
       });
       if (!orderUpdate.modifiedCount) {
@@ -1046,7 +1056,9 @@ export async function handleOrderInteraction(interaction, client) {
       await replyNotice(interaction, "BUKTI SUDAH DIPROSES", "Admin lain sudah memeriksa bukti ini.");
       return;
     }
-    const rejectedOrderUpdate = await db.collection("orders").updateOne({ _id: order._id, status: "ON HOLD" }, {
+    const rejectedOrderUpdate = await db.collection("orders").updateOne({
+      _id: order._id, status: "ON HOLD", paymentStatus: "pending_review", latestProofId: String(proof._id),
+    }, {
       $set: { paymentStatus: "rejected", updatedAt: new Date() },
     });
     if (!rejectedOrderUpdate.modifiedCount) {
@@ -1177,9 +1189,15 @@ export async function handleOrderInteraction(interaction, client) {
       return;
     }
     if (livePrice !== order.unitPrice) {
-      await db.collection("orders").updateOne({ _id: order._id, status: "ON HOLD" }, {
+      const repriced = await db.collection("orders").updateOne({
+        _id: order._id, status: "ON HOLD", paymentStatus: { $nin: ["verified", "pending_review"] },
+      }, {
         $set: { unitPrice: livePrice, totalPrice: liveTotal, paymentMethod: null, paymentStatus: "unpaid", updatedAt: new Date() },
       });
+      if (!repriced.modifiedCount) {
+        await replyNotice(interaction, "STATUS BERUBAH", "Status pembayaran berubah saat permintaan diproses. Muat ulang panel sebelum mencoba lagi.");
+        return;
+      }
       const repricedOrder = await db.collection("orders").findOne({ _id: order._id });
       await refreshOrderMessage(repricedOrder, client);
       if (order.paymentMessageId) {
@@ -1198,9 +1216,15 @@ export async function handleOrderInteraction(interaction, client) {
       await replyNotice(interaction, "METODE PEMBAYARAN BELUM SIAP", missing);
       return;
     }
-    await db.collection("orders").updateOne({ _id: order._id, status: "ON HOLD" }, {
+    const methodUpdate = await db.collection("orders").updateOne({
+      _id: order._id, status: "ON HOLD", paymentStatus: { $nin: ["verified", "pending_review"] },
+    }, {
       $set: { paymentMethod: method, paymentStatus: "unpaid", paymentMessageId: interaction.message.id, updatedAt: new Date() },
     });
+    if (!methodUpdate.modifiedCount) {
+      await replyNotice(interaction, "PEMBAYARAN TERKUNCI", "Bukti pembayaran atau perubahan status lain sudah masuk. Pilihan metode pembayaran tidak diubah.");
+      return;
+    }
     const updated = await db.collection("orders").findOne({ _id: order._id });
     await interaction.update(buildPaymentInstruction(updated, method, payment));
     await db.collection("audit_logs").insertOne({
@@ -1261,7 +1285,13 @@ export async function handleOrderInteraction(interaction, client) {
       await replyNotice(interaction, "PILIHAN TIDAK DIKENAL", "Buka ulang panel pesanan dan coba lagi.");
       return;
     }
-    await db.collection("orders").updateOne({ _id: order._id, status: "ON HOLD", paymentStatus: { $ne: "verified" } }, { $set: changes });
+    const selectionUpdate = await db.collection("orders").updateOne({
+      _id: order._id, status: "ON HOLD", paymentStatus: { $nin: ["verified", "pending_review"] },
+    }, { $set: changes });
+    if (!selectionUpdate.modifiedCount) {
+      await replyNotice(interaction, "PESANAN TERKUNCI", "Status pembayaran berubah saat pilihan diproses. Muat ulang panel pesanan.");
+      return;
+    }
     const updated = await db.collection("orders").findOne({ _id: order._id });
     await interaction.update(await buildOrderPanel(updated));
     if (previousPaymentMethod && order.paymentMessageId) {
@@ -1377,6 +1407,7 @@ export async function handleOrderMessage(message, client) {
   const order = await db.collection("orders").findOne({
     guildId: message.guild.id, channelId: message.channel.id, buyerId: message.author.id,
     status: "ON HOLD", paymentMethod: { $in: ["qris", "bank"] },
+    paymentStatus: { $in: ["unpaid", null] },
   });
   if (!order) return;
   const attachments = [...message.attachments.values()].map(item => ({
@@ -1384,18 +1415,32 @@ export async function handleOrderMessage(message, client) {
     contentType: clean(item.contentType || "", 100), size: Number(item.size || 0),
   }));
   if (!attachments.length) return;
-  await db.collection("payment_proofs").updateMany(
-    { orderId: String(order._id), status: "pending" },
-    { $set: { status: "superseded", updatedAt: new Date() } },
-  );
+  const validation = validateProofAttachments(attachments);
+  if (!validation.ok) {
+    await message.reply({ content: validation.reason, allowedMentions: { repliedUser: false } }).catch(() => {});
+    return;
+  }
   const proofResult = await db.collection("payment_proofs").insertOne({
     orderId: String(order._id), orderCode: order.orderCode, guildId: message.guild.id,
     channelId: message.channel.id, buyerId: message.author.id, messageId: message.id,
     attachments, status: "pending", createdAt: new Date(),
   });
-  await db.collection("orders").updateOne({ _id: order._id, status: "ON HOLD" }, {
+  const claim = await db.collection("orders").updateOne({
+    _id: order._id, status: "ON HOLD", paymentMethod: order.paymentMethod,
+    paymentStatus: { $in: ["unpaid", null] },
+  }, {
     $set: { paymentStatus: "pending_review", latestProofId: String(proofResult.insertedId), updatedAt: new Date() },
   });
+  if (!claim.modifiedCount) {
+    await db.collection("payment_proofs").updateOne({ _id: proofResult.insertedId, status: "pending" }, {
+      $set: { status: "superseded", updatedAt: new Date(), supersededReason: "order_state_changed" },
+    });
+    return;
+  }
+  await db.collection("payment_proofs").updateMany(
+    { orderId: String(order._id), _id: { $ne: proofResult.insertedId }, status: "pending" },
+    { $set: { status: "superseded", updatedAt: new Date() } },
+  );
   const refreshedOrder = await db.collection("orders").findOne({ _id: order._id });
   await refreshOrderMessage(refreshedOrder, client);
   const roleMentions = [config.ids.founderRole, config.ids.adminRole].filter(Boolean);
