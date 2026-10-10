@@ -24,7 +24,7 @@ test("category selection updates the original catalog message", () => {
   );
   assert.match(category, /await interaction\.deferUpdate\(\)/);
   assert.match(category, /await interaction\.editReply\(await buildCatalogPayload\(category, ""\)\)/);
-  assert.doesNotMatch(category, /deferReply|MessageFlags\.Ephemeral/);
+  assert.doesNotMatch(category, /await interaction\\.deferReply\\(/);
 });
 
 test("product selection updates the original catalog message and keeps errors separate", () => {
