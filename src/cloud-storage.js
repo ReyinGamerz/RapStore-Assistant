@@ -31,26 +31,37 @@ function safeFilename(value) {
 function storageSettings() {
   const storage = config.cloudStorage || {};
   const required = [
-    ["R2_ACCOUNT_ID", storage.r2AccountId],
-    ["R2_ACCESS_KEY_ID", storage.r2AccessKeyId],
-    ["R2_SECRET_ACCESS_KEY", storage.r2SecretAccessKey],
-    ["R2_BUCKET_NAME", storage.r2BucketName],
-    ["R2_PUBLIC_BASE_URL", storage.r2PublicBaseUrl],
+    ["B2_S3_ENDPOINT", storage.b2S3Endpoint],
+    ["B2_REGION", storage.b2Region],
+    ["B2_ACCESS_KEY_ID", storage.b2AccessKeyId],
+    ["B2_SECRET_ACCESS_KEY", storage.b2SecretAccessKey],
+    ["B2_BUCKET_NAME", storage.b2BucketName],
+    ["B2_PUBLIC_BASE_URL", storage.b2PublicBaseUrl],
   ];
   const missing = required.filter(([, value]) => !value).map(([name]) => name);
   if (missing.length) {
-    throw new Error("Cloud attachment storage is not configured. Set " + missing.join(", ") + " in .env; ticket deletion is blocked to prevent losing attachments.");
+    throw new Error("Backblaze B2 attachment storage is not configured. Set " + missing.join(", ") + " in .env; ticket deletion is blocked to prevent losing attachments.");
   }
+
+  let endpoint;
   let publicBase;
   try {
-    publicBase = new URL(storage.r2PublicBaseUrl);
+    endpoint = new URL(storage.b2S3Endpoint);
+    publicBase = new URL(storage.b2PublicBaseUrl);
   } catch {
-    throw new Error("R2_PUBLIC_BASE_URL must be a valid HTTPS URL.");
+    throw new Error("B2_S3_ENDPOINT and B2_PUBLIC_BASE_URL must be valid URLs.");
+  }
+  if (endpoint.protocol !== "https:" || endpoint.username || endpoint.password || endpoint.search || endpoint.hash || (endpoint.pathname && endpoint.pathname !== "/")) {
+    throw new Error("B2_S3_ENDPOINT must be the HTTPS S3 endpoint copied from bucket details, without a path, credentials, query, or fragment.");
   }
   if (publicBase.protocol !== "https:" || publicBase.username || publicBase.password || publicBase.search || publicBase.hash) {
-    throw new Error("R2_PUBLIC_BASE_URL must be an HTTPS base URL without credentials, query, or fragment.");
+    throw new Error("B2_PUBLIC_BASE_URL must be an HTTPS public bucket base URL without credentials, query, or fragment.");
   }
-  return { ...storage, publicBase: publicBase.href.replace(/\/$/, "") };
+  return {
+    ...storage,
+    endpoint,
+    publicBase: publicBase.href.replace(/\/$/, ""),
+  };
 }
 
 function objectPath(bucket, key) {
@@ -58,8 +69,8 @@ function objectPath(bucket, key) {
 }
 
 async function uploadObject(settings, key, body, contentType) {
-  const endpoint = new URL("https://" + settings.r2AccountId + ".r2.cloudflarestorage.com");
-  const path = objectPath(settings.r2BucketName, key);
+  const endpoint = settings.endpoint;
+  const path = objectPath(settings.b2BucketName, key);
   const now = new Date();
   const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, "");
   const dateStamp = amzDate.slice(0, 8);
@@ -69,14 +80,14 @@ async function uploadObject(settings, key, body, contentType) {
     "x-amz-date:" + amzDate + "\n";
   const signedHeaders = "host;x-amz-content-sha256;x-amz-date";
   const canonicalRequest = "PUT\n" + path + "\n\n" + canonicalHeaders + "\n" + signedHeaders + "\n" + payloadHash;
-  const scope = dateStamp + "/auto/s3/aws4_request";
+  const scope = dateStamp + "/" + settings.b2Region + "/s3/aws4_request";
   const stringToSign = "AWS4-HMAC-SHA256\n" + amzDate + "\n" + scope + "\n" + sha256(canonicalRequest);
-  const dateKey = hmac("AWS4" + settings.r2SecretAccessKey, dateStamp);
-  const regionKey = hmac(dateKey, "auto");
+  const dateKey = hmac("AWS4" + settings.b2SecretAccessKey, dateStamp);
+  const regionKey = hmac(dateKey, settings.b2Region);
   const serviceKey = hmac(regionKey, "s3");
   const signingKey = hmac(serviceKey, "aws4_request");
   const signature = hmac(signingKey, stringToSign, "hex");
-  const authorization = "AWS4-HMAC-SHA256 Credential=" + settings.r2AccessKeyId + "/" + scope +
+  const authorization = "AWS4-HMAC-SHA256 Credential=" + settings.b2AccessKeyId + "/" + scope +
     ", SignedHeaders=" + signedHeaders + ", Signature=" + signature;
   const response = await fetch(endpoint.origin + path, {
     method: "PUT",
@@ -91,7 +102,7 @@ async function uploadObject(settings, key, body, contentType) {
   });
   if (!response.ok) {
     const detail = (await response.text().catch(() => "")).slice(0, 300);
-    throw new Error("Cloud upload failed (" + response.status + ")" + (detail ? ": " + detail : ""));
+    throw new Error("Backblaze B2 upload failed (" + response.status + ")" + (detail ? ": " + detail : ""));
   }
   return settings.publicBase + "/" + key.split("/").map(awsEncode).join("/");
 }
