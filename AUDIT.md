@@ -2,13 +2,13 @@
 
 ## Status
 
-**PARTIALLY AUDITED — WITH CONFIRMED FINDINGS AND FIXES PENDING CI.**
+**PARTIALLY AUDITED — UNIT/SYNTAX CI PASS; LIVE INTEGRATION AND DEPENDENCY AUDIT REMAIN.**
 
 - Repository: `ReyinGamerz/RapStore-Assistant`
 - Base branch/commit: `main` / `55b45b1c7487aa64112425cdc690e3b6f52151c7`
 - Audit branch: `security/comprehensive-audit-2026-10-10`
 
-This audit is based on source/configuration retrieved from GitHub. A local clone could not be created because this environment could not resolve `github.com`, so tests cannot be executed locally here. The added tests and syntax checks are pending a GitHub Actions run. No live Discord, MongoDB Atlas, or VPS test was performed.
+This audit is based on source/configuration retrieved from GitHub. A local clone could not be created because this environment could not resolve `github.com`; however, GitHub Actions run [#38048167806](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38048167806) completed successfully with `npm install --ignore-scripts`, `npm test`, and `npm run check` passing. No live Discord, MongoDB Atlas, or VPS test was performed.
 
 ## A. Executive summary
 
@@ -21,33 +21,35 @@ Confirmed findings on the audited base:
 - **P2 — Shared catalog selection:** category/product changes edited one public message for everyone, allowing concurrent users to interfere with the visible selection.
 - **P2 — No automatic startup validation:** `npm start` launched the bot without running tests or syntax checks first.
 - **P2 — Dependency reproducibility:** the audited repository has no `package-lock.json`, so transitive dependency versions are not pinned.
+- **P2 — Secret-history review limitation:** current tracked files were inspected for configuration/secret handling, but the full commit history and GitHub secret-scanning results were not available for exhaustive verification.
 
-The audit branch fixes the confirmed runtime defects, shared catalog selection behavior, shutdown scheduling, and command/startup architecture described above. Those changes remain **pending CI verification**; dependency reproducibility and live integration remain open or blocked.
+The audit branch fixes the confirmed runtime defects, shared catalog selection behavior, shutdown scheduling, and command/startup architecture described above. Unit tests and syntax checks **PASS in GitHub Actions**; dependency reproducibility, full history secret scanning, and live integration remain open or blocked.
 
 ## B. Inventory and coverage
 
 | Path | Role | Status | Notes |
 |---|---|---|---|
-| `src/index.js` | Startup, interaction routing, panels, catalog, ticket creation/close, Discord events | REVIEWED — FIXED, PENDING TEST | Found undeclared `ObjectId` and a temporal-dead-zone bug in stale-ticket recovery |
-| `src/order-system.js` | Order/payment/vouch/transcript lifecycle and maintenance | REVIEWED — FIXED, PENDING TEST | Inspected authorization/state transitions; maintenance now stops and awaits an active run on shutdown |
+| `src/index.js` | Startup, interaction routing, panels, catalog, ticket creation/close, Discord events | REVIEWED — FIXED, CI PASS | Found undeclared `ObjectId` and a temporal-dead-zone bug in stale-ticket recovery; live interaction flows not tested |
+| `src/order-system.js` | Order/payment/vouch/transcript lifecycle and maintenance | REVIEWED — FIXED, CI PASS | Inspected authorization/state transitions; maintenance now stops and awaits an active run on shutdown; live lifecycle not tested |
 | `src/security.js` | Staff/owner checks, attachment validation, transcript limits, payment reconciliation | REVIEWED | Existing unit tests inspected |
-| `src/ticket-recovery.js` | Missing-ticket state reconciliation | ADDED — PENDING TEST | Shared timestamp; injected database dependency for regression testing |
+| `src/ticket-recovery.js` | Missing-ticket state reconciliation | ADDED — CI PASS | Shared timestamp; injected database dependency for regression testing |
 | `src/config.js` | Environment configuration | REVIEWED — UPDATED | Removed obsolete guild ID setting |
 | `src/database.js` | MongoDB connection and indexes | REVIEWED | Actual Atlas data/index compatibility is unavailable |
 | `src/commands.js` | Slash command definitions | REVIEWED | Defines `/catalog` and `/panel` |
-| `src/global-commands.js` | Command deployment | REVIEWED — FIXED, PENDING TEST | Global registration plus cleanup of legacy guild registrations |
-| `src/deploy-commands.js` | Manual command refresh | REVIEWED — FIXED, PENDING TEST | Enumerates current guilds and destroys the temporary client in `finally` |
+| `src/global-commands.js` | Command deployment | REVIEWED — FIXED, CI PASS; LIVE DISCORD BLOCKED | Global registration plus cleanup of legacy guild registrations |
+| `src/deploy-commands.js` | Manual command refresh | REVIEWED — FIXED, CI PASS; LIVE DISCORD BLOCKED | Enumerates current guilds and destroys the temporary client in `finally` |
 | `src/ui.js` | Components V2 UI builders/text splitting | REVIEWED | No live Discord visual test |
-| `test/security.test.js` | Security helper unit tests | REVIEWED | Source inspected; execution blocked locally |
-| `test/ticket-recovery.test.js` | Missing-channel recovery regression tests | ADDED — PENDING TEST | Tests shared timestamp and invalid identifiers |
-| `package.json` | Runtime/dependencies/npm scripts | REVIEWED — UPDATED | Added `prestart` and `validate`; syntax check includes new module |
-| `.github/workflows/ci.yml` | GitHub Actions | REVIEWED | Runs tests and syntax checks; no passing run verified in this environment |
+| `test/security.test.js` | Security helper unit tests | REVIEWED — PASS CI | Existing unit tests passed in GitHub Actions |
+| `test/ticket-recovery.test.js` | Missing-channel recovery regression tests | ADDED — PASS CI | Tests shared timestamp and invalid identifiers |
+| `package.json` | Runtime/dependencies/npm scripts | REVIEWED — CI PASS | Added `prestart` and `validate`; syntax check includes new module |
+| `.github/workflows/ci.yml` | GitHub Actions | REVIEWED — PASS | Run [#38048167806](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38048167806) passed install, tests, and syntax checks |
 | `README.md` | Setup/operation guide | REVIEWED — UPDATED | Aligned with global commands and automatic validation |
 | `.env.example` | Environment template | REVIEWED — UPDATED | Removed `DISCORD_GUILD_ID` |
 | `.gitignore` | Local secret/runtime exclusions | REVIEWED | Ignores `.env` and `.env.*`, with `.env.example` explicitly allowed |
+| `LICENSE` | License | REVIEWED | GNU General Public License version 2 text is present; confirm this matches the project's intended licensing |
 | `package-lock.json` | Deterministic dependency resolution | NOT PRESENT | Missing on audited base |
 
-This is the known inventory of files reached during the audit. A full repository-tree listing was not available through the connected GitHub tools, so unlisted/generated files are **not independently inventoried** and are not implicitly claimed as audited. Third-party dependency source, commit-history secret scanning, and private production environment were not fully inspected.
+A recursive GitHub tree listing of `main` was retrieved: 16 tracked files were present at the base commit, with `src/ticket-recovery.js`, `test/ticket-recovery.test.js`, and `AUDIT.md` added on this branch. `package-lock.json` is absent. Third-party dependency source, exhaustive commit-history secret scanning, and private production environment were not fully inspected.
 
 ## C. Architecture and feature connections
 
@@ -80,10 +82,10 @@ Command definitions live in `src/commands.js`. The event router is in `src/index
 
 | ID | Severity | Confidence | Location | Finding | Status |
 |---|---|---|---|---|---|
-| AUD-001 | P1 | High | `src/index.js` stale-ticket cleanup | `missingAt` was read before initialization; recovery could crash ticket creation when an old channel was missing | FIXED — PENDING TEST |
-| AUD-002 | P2 | High | `src/index.js` panel category/product handlers | `ObjectId` was referenced without a module-scope import; edit/delete confirmation paths could throw at runtime | FIXED — PENDING TEST |
-| AUD-003 | P2 | High | `src/global-commands.js`, `src/deploy-commands.js`, `src/config.js`, `.env.example`, README | Runtime and docs were guild-scoped and required `DISCORD_GUILD_ID`, contrary to global-only requirement | FIXED — PENDING TEST |
-| AUD-004 | P2 | High | `package.json` | `npm start` did not automatically run unit tests and syntax checks | FIXED — PENDING TEST |
+| AUD-001 | P1 | High | `src/index.js` stale-ticket cleanup | `missingAt` was read before initialization; recovery could crash ticket creation when an old channel was missing | FIXED — REGRESSION TEST PASS; LIVE FLOW NOT RUN |
+| AUD-002 | P2 | High | `src/index.js` panel category/product handlers | `ObjectId` was referenced without a module-scope import; edit/delete confirmation paths could throw at runtime | FIXED — CI PASS; LIVE FLOW NOT RUN |
+| AUD-003 | P2 | High | `src/global-commands.js`, `src/deploy-commands.js`, `src/config.js`, `.env.example`, README | Runtime and docs were guild-scoped and required `DISCORD_GUILD_ID`, contrary to global-only requirement | FIXED — CI PASS; LIVE DISCORD BLOCKED |
+| AUD-004 | P2 | High | `package.json` | `npm start` did not automatically run unit tests and syntax checks | FIXED — CI PASS |
 | AUD-005 | P2 | High | `package-lock.json` | No lockfile, so dependency resolution is not reproducible and transitive versions are not pinned | OPEN — registry/network needed |
 | AUD-006 | P2 | High | Test coverage | Existing tests are primarily pure helper tests; full Discord/MongoDB end-to-end tests are not present in the inspected inventory | OPEN — integration environment needed |
 | AUD-007 | P2 | Medium | MongoDB index initialization | Unique-index creation may fail on production data containing duplicates or incompatible legacy records | BLOCKED — inspect metadata/backup before migration |
@@ -126,9 +128,9 @@ No production Discord server, MongoDB database, or VPS was modified.
 
 | Test | Type | Result | Evidence/notes |
 |---|---|---|---|
-| Existing `test/security.test.js` | Unit | NOT RUN | Source inspected; local clone failed because GitHub DNS was unavailable |
-| New `test/ticket-recovery.test.js` | Regression unit | NOT RUN — PENDING CI | Added on audit branch |
-| `npm run check` | Syntax | NOT RUN — PENDING CI | New module added to syntax-check script |
+| Existing `test/security.test.js` | Unit | PASS | All unit tests completed successfully in GitHub Actions run [#38048167806](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38048167806) |
+| New `test/ticket-recovery.test.js` | Regression unit | PASS | Added on audit branch and passed in GitHub Actions run [#38048167806](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38048167806) |
+| `npm run check` | Syntax | PASS | `src/ticket-recovery.js` included; all configured `node --check` commands passed in GitHub Actions run [#38048167806](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38048167806) |
 | Maintenance shutdown | Static review | NOT RUN — PENDING CI | Timer clear and active-run wait are wired; no live shutdown test |
 | Global command refresh | Discord integration | BLOCKED | Requires real bot token and Discord API |
 | Ticket permission/visibility | Live E2E | BLOCKED | Requires configured Discord test server |
@@ -137,7 +139,7 @@ No production Discord server, MongoDB database, or VPS was modified.
 
 ## H. Residual risks
 
-- CI results have not yet been checked; do not treat the fixes as verified until the workflow passes.
+- CI run #38048167806 passed unit tests and syntax checks; live behavior and dependency/security-history checks remain unverified.
 - No package lockfile exists. Dependency versions are not fully reproducible until a lockfile is generated and committed in an environment with registry access.
 - Global command propagation can take time. Legacy guild command cleanup only covers guilds the bot can currently enumerate.
 - Discord role/channel permissions, Components V2 payloads, transcript uploads, and MongoDB concurrency need controlled live tests.
@@ -165,6 +167,6 @@ Never share `.env`, tokens, MongoDB URI, payment credentials, or private logs. A
 
 ## J. Conclusion
 
-Current status: **PARTIALLY AUDITED — WITH CONFIRMED FINDINGS AND FIXES PENDING TEST.**
+Current status: **PARTIALLY AUDITED — WITH FINDINGS; UNIT/SYNTAX CI PASSED, LIVE INTEGRATION AND DEPENDENCY AUDIT REMAIN.**
 
 This report does not claim 100% safety, full E2E coverage, or production verification. Upgrade the status only after CI results are checked and remaining inventory/integration limitations are addressed.
