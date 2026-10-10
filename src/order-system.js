@@ -1498,16 +1498,21 @@ async function runOrderMaintenance(client) {
 
 export function startOrderMaintenance(client) {
   let stopped = false;
+  let activeRun = null;
   const run = () => {
-    if (stopped) return;
-    void runOrderMaintenance(client).catch(error => console.error("[order-maintenance]", error?.message || error));
+    if (stopped || activeRun) return activeRun;
+    activeRun = runOrderMaintenance(client)
+      .catch(error => console.error("[order-maintenance]", error?.message || error))
+      .finally(() => { activeRun = null; });
+    return activeRun;
   };
-  run();
-  const timer = setInterval(run, 30_000);
+  void run();
+  const timer = setInterval(() => { void run(); }, 30_000);
   timer.unref?.();
-  return () => {
+  return async () => {
     stopped = true;
     clearInterval(timer);
+    if (activeRun) await activeRun;
   };
 }
 
