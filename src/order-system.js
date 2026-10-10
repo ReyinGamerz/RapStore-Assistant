@@ -210,9 +210,9 @@ function buildPaymentStatusPanel(order) {
   if (order.paymentStatus === "pending_review") {
     return v2(buildPanel(
       "BUKTI TRANSFER DITERIMA",
-      "Bukti pembayaran untuk pesanan **" + code + "** sudah diterima.\\n" +
-      "**Metode:** " + (order.paymentMethod === "qris" ? "QRIS" : "BANK") + "\\n" +
-      "**Total:** " + total + "\\n" +
+      "Bukti pembayaran untuk pesanan **" + code + "** sudah diterima.\n" +
+      "**Metode:** " + (order.paymentMethod === "qris" ? "QRIS" : "BANK") + "\n" +
+      "**Total:** " + total + "\n" +
       "**Status:** Menunggu pemeriksaan Founder/Admin. Jangan kirim ulang bukti sebelum hasil pemeriksaan keluar.",
     ));
   }
@@ -220,8 +220,8 @@ function buildPaymentStatusPanel(order) {
     const isDone = order.status === "DONE";
     return v2(buildPanel(
       isDone ? "PEMBAYARAN VALID — PESANAN SELESAI" : "BUKTI VALID — PESANAN DIPROSES",
-      "Pembayaran pesanan **" + code + "** telah diverifikasi.\\n" +
-      "**Total:** " + total + "\\n" +
+      "Pembayaran pesanan **" + code + "** telah diverifikasi.\n" +
+      "**Total:** " + total + "\n" +
       "**Status pesanan:** " + clean(order.status, 30) + ".",
     ));
   }
