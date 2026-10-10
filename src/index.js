@@ -190,7 +190,7 @@ async function handleFounderPanelSelect(interaction) {
   await interaction.reply(v2Payload({content:"Pilihan kategori tidak dikenal.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
 }
 async function handleFounderPanelModal(interaction) {
-  if (!interaction.inGuild() || !hasStaffRole(interaction.member)) { await interaction.editReply(v2Payload({content:"Akses ditolak.",flags:EPHEMERAL|MessageFlags.IsComponentsV2})); return; }
+  if (!interaction.inGuild() || !hasStaffRole(interaction.member)) { await interaction.reply(v2Payload({content:"Akses ditolak.",flags:EPHEMERAL|MessageFlags.IsComponentsV2})); return; }
   await interaction.deferReply({ flags: EPHEMERAL | MessageFlags.IsComponentsV2 });
   const db=getDatabase(), parts=interaction.customId.split(":");
   if(parts[2]==="category"){
@@ -222,8 +222,6 @@ async function handleFounderPanelModal(interaction) {
   const category=safeText(categoryField ? interaction.fields.getTextInputValue("kategori") : decodeCategory(categoryToken)||"Umum",80)||"Umum";
   const description=safeText(interaction.fields.getTextInputValue("deskripsi")||"",500);
   const emoji=safeText(interaction.fields.getTextInputValue("emoji_produk")||"",100);
-  const categoryEmojiField=interaction.fields.fields?.get("emoji_kategori");
-  const categoryEmoji=categoryEmojiField?safeText(interaction.fields.getTextInputValue("emoji_kategori")||"",100):undefined;
   if(!name||!Number.isSafeInteger(price)||price<1||!category){await interaction.editReply(v2Payload({content:"Nama, kategori, dan harga wajib valid. Harga harus berupa angka positif.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;}
   if(action==="add"){
     const now=new Date();const result=await db.collection("products").insertOne({name,price,category,emoji,description,active:true,currency:"IDR",createdAt:now,updatedAt:now,createdBy:interaction.user.id});
