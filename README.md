@@ -20,12 +20,16 @@ For a new install, run `npm install`, copy `.env.example` to `.env`, then set `D
 
 ## Active commands
 - `/catalog` — private interactive catalog, separated per user.
-- `/panel` — private Founder/Admin panel with add product, edit product, and product list.
+- `/panel` — private Founder/Admin panel for category and product management.
+- **Edit product:** selecting a product opens its edit form directly. Change the category by entering the exact name of an existing category; new or misspelled category names are rejected.
+- **Delete product:** available from the panel and requires confirmation.
+- **Delete category:** requires confirmation and deletes all products assigned to that category as well. The built-in `Umum` category cannot be deleted.
+- Edit/delete pickers show up to 25 options at a time, matching Discord's select-menu limit.
 
 ## Catalog display
 - Header: `### 🛍️ RAPSTORE — CATALOG`
 - Category label: `**Category:** Umum`
-- Product names and prices are rendered in bold; Server Boost multipliers and month count are formatted with separate backticks.
+- Product names and prices are rendered in bold; Server Boost multipliers and month count are formatted with separate backticks. The custom `alur` emoji appears with one space before **Harga:**.
 - Descriptions and reseller pricing are not shown.
 - Products come from the MongoDB `products` collection and only active products are displayed. Add or edit the intended products in `/panel`, e.g. `Server Boost 2x 1 Month`, `Server Boost 4x 1 Month`, and `Server Boost 6x 1 Month`, with the correct prices and category.
 - The category, product, and ticket-purpose menus remain below the list. `ORDER SEKARANG` and `TANYA-TANYA DULU` remain temporarily.
