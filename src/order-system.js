@@ -524,6 +524,12 @@ async function ensurePendingPaymentNotices(client, db) {
         { $set: { reviewMessageId: sent.id, reviewChannelId: channel.id, reviewNotifiedAt: new Date() }, $unset: { reviewSendingAt: "" } },
       );
       if (!saved.modifiedCount) {
+        const finalPayload = paymentReviewResultPayload(
+          "BUKTI SUDAH TIDAK AKTIF",
+          "Status pesanan berubah saat notifikasi dibuat. Periksa panel PESANAN untuk status terbaru.",
+        );
+        await sent.edit(finalPayload).catch(error =>
+          console.error("[payment-proof-notice-finalize]", error?.message || error));
         await replacePaymentReviewNotice(client, proof, "BUKTI SUDAH TIDAK AKTIF",
           "Status pesanan berubah saat notifikasi dibuat. Periksa panel PESANAN untuk status terbaru.");
       }
@@ -1589,10 +1595,14 @@ export async function handleOrderInteraction(interaction, client) {
     const showCommittedState = async currentOrder => {
       if (!proofIsLatest(currentOrder)) return false;
       if (["PROSES", "DONE"].includes(currentOrder.status) && currentOrder.paymentStatus === "verified") {
-        await updatePaymentReviewMessage(interaction, "BUKTI VALID — PESANAN DIPROSES",
+        const isDone = currentOrder.status === "DONE";
+        await updatePaymentReviewMessage(
+          interaction,
+          isDone ? "PEMBAYARAN VALID — PESANAN SELESAI" : "BUKTI VALID — PESANAN DIPROSES",
           "Bukti transfer sudah dinyatakan valid oleh <@" + (currentOrder.reviewedBy || proof.reviewedBy || interaction.user.id) + ">.\n" +
           "Pembeli: <@" + currentOrder.buyerId + ">\n" +
-          "Pesanan **" + clean(currentOrder.orderCode, 40) + "** sekarang berstatus **PROSES**.");
+          "Pesanan **" + clean(currentOrder.orderCode, 40) + "** sekarang berstatus **" + clean(currentOrder.status, 30) + "**.",
+        );
         await markProofTerminal("accepted", currentOrder.reviewedBy || interaction.user.id);
         await supersedePendingProofs(db, client, currentOrder._id, proof._id, "another_proof_accepted");
         await refreshOrderMessage(currentOrder, client).catch(error => console.error("[payment-review-order-refresh]", error?.message || error));
@@ -1743,6 +1753,7 @@ export async function handleOrderInteraction(interaction, client) {
       { $set: { status: "superseded", supersededAt: new Date(), supersededReason: "order_cancelled", updatedAt: new Date() }, $unset: { reviewSendingAt: "" } },
     ).catch(error => console.error("[payment-proof-cancel]", error?.message || error));
     const updated = await db.collection("orders").findOne({ _id: order._id });
+    await refreshPaymentStatusMessage(updated, client);
     await refreshOrderLog(updated, client).catch(error => console.error("[order-log]", error?.message || error));
     await interaction.update(v2(buildPanel("PESANAN DIBATALKAN", "Status pesanan **" + clean(order.orderCode, 40) + "** berubah menjadi **CANCELLED**. Tiket akan diarsipkan sebagai transcript.")));
     const channel = interaction.channel;
