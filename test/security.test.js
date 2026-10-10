@@ -73,7 +73,7 @@ test("ticket access is restricted to its owner or verified staff", () => {
 });
 
 test("escapes user-controlled Markdown syntax in file names", () => {
-  assert.equal(escapeDiscordMarkdown("a](<@&123>)_x_.png"), "a\\]\\(\\<@&123\\>\\)\\_x\\_.png");
+  assert.equal(escapeDiscordMarkdown("a](<@&123>)_x_.png"), "a\\]\\(\\<@&123\\>\\)\\_x\\_\\.png");
 });
 
 import { expectedProofStatus } from "../src/security.js";
