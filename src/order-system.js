@@ -1407,7 +1407,7 @@ export async function handleOrderMessage(message, client) {
   const order = await db.collection("orders").findOne({
     guildId: message.guild.id, channelId: message.channel.id, buyerId: message.author.id,
     status: "ON HOLD", paymentMethod: { $in: ["qris", "bank"] },
-    paymentStatus: { $in: ["unpaid", null] },
+    paymentStatus: { $in: ["unpaid", "rejected", null] },
   });
   if (!order) return;
   const attachments = [...message.attachments.values()].map(item => ({
