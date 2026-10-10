@@ -132,7 +132,7 @@ async function buildOrderPanel(order) {
   ));
   const buttons = [
     new ButtonBuilder().setCustomId("rapstore:order:cancel").setLabel("Batalkan Pesanan").setStyle(ButtonStyle.Danger)
-      .setDisabled(order.status === "CANCELLED" || order.status === "DONE"),
+      .setDisabled(order.status !== "ON HOLD"),
   ];
   if (order.status === "PROSES") {
     buttons.push(new ButtonBuilder().setCustomId("rapstore:order:done").setLabel("Tandai DONE").setStyle(ButtonStyle.Success));
@@ -346,8 +346,8 @@ export async function handleOrderInteraction(interaction, client) {
   }
 
   if (customId === "rapstore:order:cancel") {
-    if (order.status === "DONE" || order.status === "CANCELLED") {
-      await replyNotice(interaction, "PESANAN SUDAH SELESAI", "Pesanan ini sudah selesai atau dibatalkan.");
+    if (order.status !== "ON HOLD") {
+      await replyNotice(interaction, "PESANAN SUDAH DIPROSES", "Pesanan hanya dapat dibatalkan sebelum admin memulai proses.");
       return;
     }
     const panel = buildPanel("KONFIRMASI BATALKAN PESANAN", "Yakin ingin membatalkan pesanan **" + clean(order.orderCode, 40) + "**? Status akan menjadi **CANCELLED** dan tiket akan ditutup.");
@@ -363,12 +363,12 @@ export async function handleOrderInteraction(interaction, client) {
     return;
   }
   if (customId === "rapstore:order:cancelconfirm") {
-    if (order.status === "DONE" || order.status === "CANCELLED") {
-      await interaction.update(v2(buildPanel("PESANAN SUDAH SELESAI", "Pesanan ini sudah selesai atau dibatalkan.")));
+    if (order.status !== "ON HOLD") {
+      await interaction.update(v2(buildPanel("PESANAN SUDAH DIPROSES", "Pesanan hanya dapat dibatalkan sebelum admin memulai proses.")));
       return;
     }
     const result = await db.collection("orders").updateOne(
-      { _id: order._id, status: { $nin: ["DONE", "CANCELLED"] } },
+      { _id: order._id, status: "ON HOLD" },
       { $set: { status: "CANCELLED", cancelledAt: new Date(), cancelledBy: interaction.user.id, updatedAt: new Date() } },
     );
     if (!result.modifiedCount) {
