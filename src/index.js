@@ -30,11 +30,16 @@ async function audit(action, interaction, details = {}) {
 function safeText(value, max = 500) {
   return String(value ?? "").replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, max);
 }
-async function getProductCategories() {
-  const values = await getDatabase().collection("products").distinct("category");
-  const categories = [...new Set(values.map(v => safeText(v || "Umum", 80)).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
-  if (!categories.includes("Umum")) categories.unshift("Umum");
-  return categories.slice(0, 24);
+function buildCategoryModal(action, current = null) {\n  const modal=new ModalBuilder().setCustomId("rapstore:panelmodal:category:"+action+(current?":"+encodeCategory(current.name):"")).setTitle(action==="add"?"Tambah Kategori":"Edit Kategori");\n  const name=new TextInputBuilder().setCustomId("nama_kategori").setLabel("Nama kategori").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(80);\n  if(current?.name) name.setValue(current.name);\n  const emoji=new TextInputBuilder().setCustomId("emoji_kategori").setLabel("Emoji kategori (opsional)").setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(100);\n  if(current?.emoji) emoji.setValue(current.emoji);\n  modal.addComponents(new ActionRowBuilder().addComponents(name),new ActionRowBuilder().addComponents(emoji));\n  return modal;\n}\nasync function getProductCategories() {
+  const [saved, values] = await Promise.all([
+    getDatabase().collection("categories").find({}).sort({name:1}).toArray(),
+    getDatabase().collection("products").distinct("category")
+  ]);
+  const map = new Map();
+  for (const item of saved) if (item.name) map.set(safeText(item.name,80), safeText(item.emoji || "",100));
+  for (const value of values) if (value) { const name=safeText(value,80); if (!map.has(name)) map.set(name,""); }
+  if (!map.has("Umum")) map.set("Umum","");
+  return [...map.entries()].sort((a,b)=>a[0].localeCompare(b[0])).slice(0,25).map(([name,emoji])=>({name,emoji}));
 }
 function encodeCategory(category) { return Buffer.from(category, "utf8").toString("base64url"); }
 function decodeCategory(encoded) { try { return Buffer.from(encoded, "base64url").toString("utf8"); } catch { return ""; } }
@@ -48,8 +53,7 @@ async function showCategoryPicker(interaction, mode, productId = "") {
     .setPlaceholder("Pilih kategori")
     .setMinValues(1).setMaxValues(1)
     .addOptions([
-      ...categories.map(category => ({label: ((categoryEmojis.get(category) ? categoryEmojis.get(category) + " " : "") + category).slice(0,100), value: encodeCategory(category), description: "Gunakan kategori ini"})),
-      {label:"＋ Buat kategori baru",value:"__new__",description:"Masukkan nama kategori baru"},
+      ...categories.map(category => ({label: ((category.emoji || categoryEmojis.get(category.name) || "") + (category.emoji || categoryEmojis.get(category.name) ? " " : "") + category.name).slice(0,100), value: encodeCategory(category.name), description: "Gunakan kategori ini"})),
     ]);
   const panel = buildPanel("PILIH KATEGORI", "Pilih kategori yang sudah ada agar penulisan konsisten, atau buat kategori baru.");
   panel.addActionRowComponents(new ActionRowBuilder().addComponents(menu));
@@ -78,7 +82,11 @@ async function showFounderPanel(interaction) {
   if (!interaction.inGuild() || !hasStaffRole(interaction.member)) {
     await interaction.reply(v2Payload({content:"Panel hanya untuk Founder/Admin.",flags:EPHEMERAL|MessageFlags.IsComponentsV2})); return;
   }
-  const panel = buildPanel("RAPSTORE — PANEL KATALOG", "Kelola produk katalog. Pilih kategori dari daftar agar tidak salah ketik.", ["Reseller dan pengelolaan stok tidak digunakan."]);
+  const panel = buildPanel("RAPSTORE — PANEL KATALOG", "Kelola kategori dan produk katalog.", []);
+  panel.addActionRowComponents(new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId("rapstore:panel:addcategory").setLabel("Add Kategori").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId("rapstore:panel:editcategory").setLabel("Edit Kategori").setStyle(ButtonStyle.Secondary)
+  ));
   panel.addActionRowComponents(new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId("rapstore:panel:add").setLabel("Tambah Produk").setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId("rapstore:panel:edit").setLabel("Edit Produk").setStyle(ButtonStyle.Secondary),
@@ -89,6 +97,14 @@ async function showFounderPanel(interaction) {
 async function handleFounderPanelButton(interaction) {
   if (!interaction.inGuild() || !hasStaffRole(interaction.member)) { await interaction.reply(v2Payload({content:"Akses ditolak.",flags:EPHEMERAL|MessageFlags.IsComponentsV2})); return; }
   const action = interaction.customId.split(":").pop();
+  if (action === "addcategory") { await interaction.showModal(buildCategoryModal("add")); return; }
+  if (action === "editcategory") {
+    const categories=await getProductCategories();
+    if(!categories.length){await interaction.reply(v2Payload({content:"Belum ada kategori.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;}
+    const menu=new StringSelectMenuBuilder().setCustomId("rapstore:panelchoose:editcategorymanage").setPlaceholder("Pilih kategori yang ingin diedit").setMinValues(1).setMaxValues(1).addOptions(categories.slice(0,25).map(cat=>({label:((cat.emoji?cat.emoji+" ":"")+cat.name).slice(0,100),value:encodeCategory(cat.name)})));
+    const panel=buildPanel("EDIT KATEGORI","Pilih kategori yang ingin diubah.");panel.addActionRowComponents(new ActionRowBuilder().addComponents(menu));
+    await interaction.update({flags:MessageFlags.IsComponentsV2|MessageFlags.Ephemeral,components:[panel]});return;
+  }
   if (action === "add") { await showCategoryPicker(interaction,"addcategory"); return; }
   const db = getDatabase();
   if (action === "list") {
@@ -132,6 +148,26 @@ async function handleFounderPanelSelect(interaction) {
 async function handleFounderPanelModal(interaction) {
   if (!interaction.inGuild() || !hasStaffRole(interaction.member)) { await interaction.reply(v2Payload({content:"Akses ditolak.",flags:EPHEMERAL|MessageFlags.IsComponentsV2})); return; }
   const db=getDatabase(), parts=interaction.customId.split(":");
+  if(parts[2]==="category"){
+    const categoryAction=parts[3];
+    const name=safeText(interaction.fields.getTextInputValue("nama_kategori"),80);
+    const emoji=safeText(interaction.fields.getTextInputValue("emoji_kategori")||"",100);
+    if(!name){await interaction.reply(v2Payload({content:"Nama kategori wajib diisi.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;}
+    const collection=db.collection("categories");
+    if(categoryAction==="add"){
+      const existing=await collection.findOne({name});
+      if(existing){await interaction.reply(v2Payload({content:"Kategori itu sudah ada. Gunakan Edit Kategori untuk mengubahnya.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;}
+      await collection.insertOne({name,emoji,createdAt:new Date(),createdBy:interaction.user.id});
+      await interaction.reply(v2Payload({content:"Kategori **"+(emoji?emoji+" ":"")+name+"** berhasil dibuat. Sekarang kategori tersedia di dropdown Tambah Produk.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;
+    }
+    const oldName=decodeCategory(parts[4]||"");
+    if(!oldName){await interaction.reply(v2Payload({content:"Kategori lama tidak valid.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;}
+    if(name!==oldName && await collection.findOne({name})){await interaction.reply(v2Payload({content:"Nama kategori itu sudah digunakan.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;}
+    await collection.updateOne({name:oldName},{$set:{name,emoji,updatedAt:new Date(),updatedBy:interaction.user.id}},{upsert:true});
+    if(name!==oldName) await db.collection("products").updateMany({category:oldName},{$set:{category:name,categoryEmoji:emoji,updatedAt:new Date()}});
+    else await db.collection("products").updateMany({category:name},{$set:{categoryEmoji:emoji,updatedAt:new Date()}});
+    await interaction.reply(v2Payload({content:"Kategori berhasil diperbarui.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;
+  }
   const action=parts[2];
   if(action!=="add"&&action!=="edit") return;
   const name=safeText(interaction.fields.getTextInputValue("nama"),100);
