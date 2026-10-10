@@ -212,7 +212,7 @@ async function renderCatalogPanel(interaction, selectedCategory = "") {
       const retail = Number(product.price || 0);
       const reseller = Number.isSafeInteger(product.resellerPrice) && product.resellerPrice > 0 ? product.resellerPrice : retail;
       const name = safeText(product.name, 100);
-      const isServerBoost = /server\\s*boost/i.test(name) || /server\\s*boost/i.test(safeText(product.category || "", 80));
+      const isServerBoost = /server\s*boost/i.test(name) || /server\s*boost/i.test(safeText(product.category || "", 80));
       if (isServerBoost) {
         lines.push("### " + name);
         lines.push("Harga: " + formatPrice(retail) + " | Reseller " + formatPrice(reseller));
