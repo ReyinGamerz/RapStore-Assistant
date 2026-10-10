@@ -272,10 +272,20 @@ async function refreshPersistentPanels(readyClient, onlyType = null) {
       // Remove any legacy public management panel created by older bot versions.
       if (record.type === "panel") {
         const oldChannel = await readyClient.channels.fetch(record.channelId).catch(() => null);
-        const oldMessage = oldChannel?.messages
-          ? await oldChannel.messages.fetch(record.messageId).catch(() => null)
-          : null;
-        if (oldMessage) await oldMessage.delete().catch(error => logError("legacy-public-panel-delete", error));
+        if (!oldChannel?.messages) {
+          console.error("[persistent-panel] Cannot access legacy public panel channel; keeping cleanup record to retry.");
+          continue;
+        }
+        const oldMessage = await oldChannel.messages.fetch(record.messageId).catch(() => null);
+        if (oldMessage) {
+          try {
+            await oldMessage.delete();
+          } catch (error) {
+            logError("legacy-public-panel-delete", error);
+            console.error("[persistent-panel] Could not delete legacy public panel; keeping cleanup record to retry.");
+            continue;
+          }
+        }
         await db.collection("persistent_panels").deleteOne({ _id: record._id });
         console.log("[persistent-panel] Removed legacy public management panel; /panel is now ephemeral.");
         continue;
