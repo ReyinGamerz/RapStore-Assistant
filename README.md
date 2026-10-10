@@ -64,6 +64,11 @@ QRIS and bank details are not bundled in the repository. If the corresponding co
 
 ## Components V2 and security
 - All newly implemented order/payment messages use Discord Components V2; they do not use classic embeds.
+- Ticket creation uses a unique MongoDB reservation per server/user to reject concurrent double-clicks; abandoned reservations expire automatically.
+- Payment-proof uploads are limited to five attachments and 15 MB total per message. Conditional MongoDB updates prevent payment/order controls from overwriting a proof already submitted.
+- Transcript generation is capped at 2,000 messages and 100 MB total attachment size. If a ticket exceeds either limit, archival stops and the original ticket channel is retained for manual review.
+- The built-in `Umum` category is protected in both the confirmation UI and the final deletion handler.
+- Run `npm test` and `npm run check` before deploying. These tests cover proof-attachment validation; they do not replace a live Discord/MongoDB integration test.
 - The bot needs permission to manage channels and channel permission overwrites in the configured support category. For transcript archival/recovery, it also needs View Channel, Read Message History, Send Messages, and Attach Files in `TRANSCRIPT_CHANNEL_ID`.
 - Configure `FOUNDER_ROLE_ID` and `ADMIN_ROLE_ID` for the intended roles.
 - The bot uses the `GuildMessages` and privileged `MessageContent` intents to detect order-ticket attachments. Enable **Message Content Intent** in the Discord Developer Portal, or proof attachments may not be visible to the bot.

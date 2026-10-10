@@ -300,6 +300,10 @@ async function handleFounderPanelButton(interaction) {
     const categoryRecord = await db.collection("categories").findOne({_id:new ObjectId(categoryId)});
     if (!categoryRecord) { await interaction.editReply(v2Payload({content:"Kategori tidak ditemukan atau sudah dihapus.",flags:EPHEMERAL|MessageFlags.IsComponentsV2})); return; }
     const name = categoryRecord.name;
+    if (name.trim().toLocaleLowerCase("id-ID") === "umum") {
+      await interaction.editReply(v2Payload({content:"Kategori bawaan **Umum** tidak dapat dihapus.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
+      return;
+    }
     const removedProducts = await db.collection("products").deleteMany({category:name});
     await db.collection("categories").deleteOne({_id:new ObjectId(categoryId)});
     await audit("category.deleted",interaction,{category:name,deletedProducts:removedProducts.deletedCount});
@@ -350,6 +354,10 @@ async function handleFounderPanelSelect(interaction) {
     const name = decodeCategory(interaction.values[0]);
     if (!name) {
       await interaction.update(v2Payload({content:"Kategori tidak valid.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
+      return;
+    }
+    if (name.trim().toLocaleLowerCase("id-ID") === "umum") {
+      await interaction.update(v2Payload({content:"Kategori bawaan **Umum** tidak dapat dihapus.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
       return;
     }
     const category = (await getProductCategories()).find(item => item.name === name);
@@ -668,6 +676,19 @@ async function handleCatalogSelection(interaction) {
         return;
       }
     }
+    const reservations = db.collection("ticket_reservations");
+    const reservationTime = new Date();
+    await reservations.deleteMany({ createdAt: { $lt: new Date(Date.now() - 10 * 60 * 1000) } });
+    try {
+      await reservations.insertOne({ guildId: interaction.guildId, buyerId: interaction.user.id, interactionId: interaction.id, createdAt: reservationTime });
+    } catch (error) {
+      if (error?.code === 11000) {
+        await interaction.followUp(v2Payload({ content: "Permintaan tiket lu sedang diproses. Tunggu sebentar lalu cek daftar tiket sebelum mencoba lagi.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
+        return;
+      }
+      throw error;
+    }
+    try {
     // Reconcile active ticket records with Discord before enforcing the one-ticket limit.
     // Staff may manually delete a channel, bypassing the normal close button.
     const activeTickets = await db.collection("tickets").find({
@@ -677,7 +698,13 @@ async function handleCatalogSelection(interaction) {
     }).toArray();
     let existing = null;
     for (const activeTicket of activeTickets) {
-      const liveChannel = await interaction.guild.channels.fetch(activeTicket.channelId).catch(() => null);
+      let liveChannel;
+      try {
+        liveChannel = await interaction.guild.channels.fetch(activeTicket.channelId);
+      } catch (error) {
+        if (Number(error?.code) === 10003) liveChannel = null;
+        else throw error;
+      }
       if (liveChannel) {
         existing ||= activeTicket;
         continue;
@@ -746,12 +773,15 @@ async function handleCatalogSelection(interaction) {
         ));
         await channel.send({ flags: MessageFlags.IsComponentsV2, components: [ticketWelcome] });
       }
-      await interaction.followUp(v2Payload({ content: "✓ Tiket berhasil dibuat: <#" + channel.id + ">.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
     } catch (error) {
       await db.collection("tickets").deleteOne({ channelId: channel.id }).catch(() => {});
       await db.collection("orders").deleteMany({ channelId: channel.id, status: "ON HOLD" }).catch(() => {});
       await channel.delete("Failed to initialize catalog ticket").catch(() => {});
       throw error;
+    }
+    await interaction.followUp(v2Payload({ content: "✓ Tiket berhasil dibuat: <#" + channel.id + ">.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
+    } finally {
+      await reservations.deleteOne({ guildId: interaction.guildId, buyerId: interaction.user.id, interactionId: interaction.id }).catch(error => logError("ticket-reservation-release", error));
     }
   }
 }
