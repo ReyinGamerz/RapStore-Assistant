@@ -356,15 +356,28 @@ export async function archiveAndDeleteTicket({ channel, ticket, client, closedBy
 
 async function publishPendingVouches(client) {
   const db = getDatabase();
-  const pending = await db.collection("vouches").find({ status: "pending_publish" }).sort({ createdAt: 1 }).limit(20).toArray();
+  const pending = await db.collection("vouches").find({
+    $or: [
+      { status: "pending_publish" },
+      { status: "publishing", publishingAt: { $lt: new Date(Date.now() - 5 * 60 * 1000) } },
+    ],
+  }).sort({ createdAt: 1 }).limit(20).toArray();
   for (const vouch of pending) {
+    const claim = await db.collection("vouches").updateOne({
+      _id: vouch._id,
+      $or: [
+        { status: "pending_publish" },
+        { status: "publishing", publishingAt: { $lt: new Date(Date.now() - 5 * 60 * 1000) } },
+      ],
+    }, { $set: { status: "publishing", publishingAt: new Date() } });
+    if (!claim.modifiedCount) continue;
     try {
       if (!config.vouchChannelId) throw new Error("VOUCH_CHANNEL_ID is not configured.");
       const channel = await client.channels.fetch(config.vouchChannelId).catch(() => null);
       if (!channel || typeof channel.send !== "function") throw new Error("VOUCH_CHANNEL_ID is not a sendable channel.");
       const rating = Math.max(1, Math.min(5, Number(vouch.rating) || 5));
       const stars = "★".repeat(rating) + "☆".repeat(5 - rating);
-      const message = clean(vouch.message || "vouch otomatis setelah 1 jam.", 700).replace(/\r/g, "");
+      const message = clean(vouch.message || "vouch otomatis setelah 1 jam. (ini jika user ga send vouch)", 700).replace(/\r/g, "");
       const quotedMessage = message.split("\n").map(line => "> " + line).join("\n");
       const date = new Date(vouch.createdAt || Date.now()).toLocaleDateString("id-ID", {
         timeZone: "Asia/Jakarta", day: "numeric", month: "long", year: "numeric",
@@ -388,8 +401,8 @@ async function publishPendingVouches(client) {
         allowedMentions: { parse: [], users: [], roles: [] },
       });
       await db.collection("vouches").updateOne(
-        { _id: vouch._id, status: "pending_publish" },
-        { $set: { status: "published", publishedAt: new Date(), publishedMessageId: sent.id } },
+        { _id: vouch._id, status: "publishing" },
+        { $set: { status: "published", publishedAt: new Date(), publishedMessageId: sent.id }, $unset: { publishingAt: "" } },
       );
       await db.collection("orders").updateOne({ _id: new ObjectId(vouch.orderId) }, {
         $set: { vouchPublishedAt: new Date(), updatedAt: new Date() },
@@ -401,6 +414,10 @@ async function publishPendingVouches(client) {
         if (doneMessage) await doneMessage.edit(buildDonePanel(order, true)).catch(() => {});
       }
     } catch (error) {
+      await db.collection("vouches").updateOne(
+        { _id: vouch._id, status: "publishing" },
+        { $set: { status: "pending_publish" }, $unset: { publishingAt: "" } },
+      ).catch(() => {});
       console.error("[vouch-publish]", error?.message || error);
     }
   }
@@ -430,7 +447,7 @@ async function runOrderMaintenance(client) {
             const inserted = await db.collection("vouches").insertOne({
               orderId: String(candidate._id), orderCode: candidate.orderCode, guildId: candidate.guildId,
               channelId: candidate.channelId, buyerId: candidate.buyerId, productName: candidate.productName || "Produk RapStore",
-              rating: 5, message: "vouch otomatis setelah 1 jam.", automatic: true,
+              rating: 5, message: "vouch otomatis setelah 1 jam. (ini jika user ga send vouch)", automatic: true,
               status: "pending_publish", createdAt: new Date(candidate.autoCloseAt || now),
             });
             vouch = await db.collection("vouches").findOne({ _id: inserted.insertedId });
@@ -640,7 +657,7 @@ export async function handleOrderInteraction(interaction, client) {
       await refreshOrderMessage(updated, client);
       await interaction.update(v2(buildPanel(
         "BUKTI TRANSFER DITERIMA",
-        "Diperiksa oleh <@" + interaction.user.id + ">.\nPesanan **" + clean(order.orderCode, 40) + "** sekarang berstatus **PROSES**.",
+        "Diperiksa oleh <@" + interaction.user.id + ">.\nPembeli <@" + order.buyerId + "> sudah dikonfirmasi. Pesanan **" + clean(order.orderCode, 40) + "** sekarang berstatus **PROSES**.",
       )));
       await db.collection("audit_logs").insertOne({
         action: "payment.verified", actorId: interaction.user.id, guildId: interaction.guildId,
@@ -668,7 +685,7 @@ export async function handleOrderInteraction(interaction, client) {
     await refreshOrderMessage(rejectedOrder, client);
     await interaction.update(v2(buildPanel(
       "BUKTI TRANSFER TIDAK VALID",
-      "Diperiksa oleh <@" + interaction.user.id + ">.\nPengguna telah diminta mengirim ulang bukti transfer.",
+      "Diperiksa oleh <@" + interaction.user.id + ">.\n<@" + order.buyerId + ">, bukti ini tidak valid. Silakan kirim ulang bukti pembayaran yang jelas dan sesuai nominal. Status pesanan tetap **ON HOLD**.",
     )));
     await db.collection("audit_logs").insertOne({
       action: "payment.rejected", actorId: interaction.user.id, guildId: interaction.guildId,
