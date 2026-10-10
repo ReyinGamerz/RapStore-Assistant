@@ -204,6 +204,52 @@ function buildPaymentPicker() {
   return v2(container);
 }
 
+function buildPaymentStatusPanel(order) {
+  const code = clean(order.orderCode, 40);
+  const total = price(order.totalPrice);
+  if (order.paymentStatus === "pending_review") {
+    return v2(buildPanel(
+      "BUKTI TRANSFER DITERIMA",
+      "Bukti pembayaran untuk pesanan **" + code + "** sudah diterima.\\n" +
+      "**Metode:** " + (order.paymentMethod === "qris" ? "QRIS" : "BANK") + "\\n" +
+      "**Total:** " + total + "\\n" +
+      "**Status:** Menunggu pemeriksaan Founder/Admin. Jangan kirim ulang bukti sebelum hasil pemeriksaan keluar.",
+    ));
+  }
+  if (order.paymentStatus === "verified") {
+    const isDone = order.status === "DONE";
+    return v2(buildPanel(
+      isDone ? "PEMBAYARAN VALID — PESANAN SELESAI" : "BUKTI VALID — PESANAN DIPROSES",
+      "Pembayaran pesanan **" + code + "** telah diverifikasi.\\n" +
+      "**Total:** " + total + "\\n" +
+      "**Status pesanan:** " + clean(order.status, 30) + ".",
+    ));
+  }
+  if (order.status === "CANCELLED" || order.paymentStatus === "cancelled") {
+    return v2(buildPanel(
+      "PESANAN DIBATALKAN",
+      "Pesanan **" + code + "** sudah dibatalkan. Jangan melakukan transfer atau mengirim bukti pembayaran untuk pesanan ini.",
+    ));
+  }
+  return null;
+}
+
+async function refreshPaymentStatusMessage(order, client) {
+  if (!order?.paymentMessageId) return;
+  const payload = buildPaymentStatusPanel(order);
+  if (!payload) return;
+  try {
+    const guild = await client.guilds.fetch(order.guildId).catch(() => null);
+    const channel = guild ? await guild.channels.fetch(order.channelId).catch(() => null) : null;
+    const message = channel?.messages
+      ? await channel.messages.fetch(order.paymentMessageId).catch(() => null)
+      : null;
+    if (message) await message.edit(payload);
+  } catch (error) {
+    console.error("[payment-status-message-refresh]", order.orderCode, error?.message || error);
+  }
+}
+
 function paymentReviewResultPayload(title, body) {
   return {
     ...v2(buildPanel(title, body)),
@@ -578,6 +624,7 @@ async function refreshOrderMessage(order, client) {
       }
     }
   }
+  await refreshPaymentStatusMessage(order, client);
   await refreshOrderLog(order, client).catch(error => console.error("[order-log]", error?.message || error));
 }
 function buildDonePanel(order, vouchSubmitted = false) {
