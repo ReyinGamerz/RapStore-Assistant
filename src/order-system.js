@@ -1232,6 +1232,7 @@ export async function handleOrderInteraction(interaction, client) {
       return;
     }
     const updated = await db.collection("orders").findOne({ _id: order._id });
+    await refreshOrderLog(updated, client).catch(error => console.error("[order-log]", error?.message || error));
     await interaction.update(v2(buildPanel("PESANAN DIBATALKAN", "Status pesanan **" + clean(order.orderCode, 40) + "** berubah menjadi **CANCELLED**. Tiket akan diarsipkan sebagai transcript.")));
     const channel = interaction.channel;
     if (order.orderMessageId) {
@@ -1452,6 +1453,10 @@ export async function handleOrderMessage(message, client) {
           updatedAt: new Date(),
         },
       });
+      for (const activeOrder of activeOrders) {
+        const cancelledOrder = await db.collection("orders").findOne({ _id: activeOrder._id });
+        await refreshOrderLog(cancelledOrder, client).catch(error => console.error("[order-log]", error?.message || error));
+      }
       await db.collection("payment_proofs").updateMany({
         orderId: { $in: orderIds },
         status: "pending",
