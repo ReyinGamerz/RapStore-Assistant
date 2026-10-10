@@ -216,6 +216,27 @@ function buildPaymentStatusPanel(order) {
       "**Status:** Menunggu pemeriksaan Founder/Admin. Jangan kirim ulang bukti sebelum hasil pemeriksaan keluar.",
     ));
   }
+  if (order.paymentStatus === "rejected") {
+    const method = order.paymentMethod === "qris" ? "qris" : "bank";
+    const payment = configuredPayment(method);
+    if (payment) {
+      return buildPaymentInstruction(
+        order,
+        method,
+        payment,
+        "Bukti sebelumnya ditolak. Periksa nominal pembayaran di bawah, lalu kirim ulang bukti yang jelas di channel tiket ini.",
+      );
+    }
+    const panel = buildPanel(
+      "BUKTI TRANSFER TIDAK VALID",
+      "Bukti sebelumnya ditolak. Pilih QRIS atau BANK untuk melihat instruksi pembayaran, lalu kirim ulang bukti yang jelas.",
+    );
+    panel.addActionRowComponents(new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId("rapstore:payment:qris").setLabel("QRIS").setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId("rapstore:payment:bank").setLabel("BANK").setStyle(ButtonStyle.Secondary),
+    ));
+    return v2(panel);
+  }
   if (order.paymentStatus === "verified") {
     const isDone = order.status === "DONE";
     return v2(buildPanel(
@@ -524,9 +545,15 @@ function configuredPayment(method) {
   if (!bankName || !accountName || !accountNumber) return null;
   return { bankName, accountName, accountNumber };
 }
-function buildPaymentInstruction(order, method, payment) {
+function buildPaymentInstruction(order, method, payment, statusNote = "") {
   const container = new ContainerBuilder();
-  container.addTextDisplayComponents(new TextDisplayBuilder().setContent("## PEMBAYARAN " + (method === "qris" ? "QRIS" : "BANK")));
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
+    "## " + (statusNote ? "BUKTI DITOLAK — " : "PEMBAYARAN ") + (method === "qris" ? "QRIS" : "BANK"),
+  ));
+  if (statusNote) {
+    divider(container);
+    container.addTextDisplayComponents(new TextDisplayBuilder().setContent("> " + clean(statusNote, 500)));
+  }
   divider(container);
   container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
     "**Kode pesanan:** " + clean(order.orderCode, 40) + "\n" +
