@@ -880,8 +880,15 @@ async function runOrderMaintenance(client) {
             reason: staleTicket.closeReason || "recovered_incomplete_archive",
           });
         } else {
+          const missingAt = new Date();
           await db.collection("tickets").updateOne({ _id: staleTicket._id, status: "closing" }, {
-            $set: { status: "missing_channel", closeReason: "channel_missing_before_archive", closeBlockedAt: new Date() },
+            $set: {
+              status: "missing_channel",
+              closeReason: "channel_missing_before_archive",
+              closeBlockedAt: missingAt,
+              missingChannelDetectedAt: missingAt,
+              transcriptStatus: staleTicket.transcriptFileName ? "archived" : "unavailable",
+            },
             $unset: { archiveProcessingAt: "" },
           });
           await db.collection("orders").updateMany({
@@ -891,13 +898,24 @@ async function runOrderMaintenance(client) {
             ticketClosedAt: { $exists: false },
           }, {
             $set: {
-              ticketCloseBlockedAt: new Date(),
-              ticketCloseBlockedReason: "channel_missing_before_archive",
-              updatedAt: new Date(),
+              ticketCloseBlockedAt: missingAt,
+              ticketCloseBlockedReason: staleTicket.transcriptFileName
+                ? "channel_missing_after_transcript_archive"
+                : "channel_missing_before_archive",
+              ticketChannelMissingAt: missingAt,
+              transcriptStatus: staleTicket.transcriptFileName ? "archived" : "unavailable",
+              updatedAt: missingAt,
             },
             $unset: { closeProcessingAt: "" },
           });
-          console.error("[ticket-archive-recovery] Channel is confirmed missing; transcript cannot be reconstructed:", staleTicket.channelId);
+          console.warn(
+            "[ticket-archive-recovery] Ticket channel is missing; order data was preserved:",
+            JSON.stringify({
+              orderCode: staleTicket.ticketCode || null,
+              channelId: staleTicket.channelId,
+              transcriptStatus: staleTicket.transcriptFileName ? "archived" : "unavailable",
+            }),
+          );
         }
       } catch (error) {
         console.error("[ticket-archive-recovery]", staleTicket.channelId, error?.message || error);
@@ -957,17 +975,43 @@ async function runOrderMaintenance(client) {
         } else if (channel && ticket?.status === "closed" && ticket.transcriptFileName) {
           await channel.delete("RapStore ticket already archived as " + ticket.transcriptFileName);
         } else if (!channel) {
-          if (ticket && ["open", "closing"].includes(ticket.status)) {
-            await db.collection("tickets").updateOne({ _id: ticket._id, status: ticket.status }, {
-              $set: { status: "missing_channel", closedAt: new Date(), closeReason: "channel_missing_before_auto_close", closeBlockedAt: new Date() },
+          const missingAt = new Date();
+          const transcriptExists = Boolean(ticket?.transcriptFileName);
+          if (ticket && !transcriptExists) {
+            await db.collection("tickets").updateOne({ _id: ticket._id, transcriptFileName: { $exists: false } }, {
+              $set: {
+                status: "missing_channel",
+                closedAt: missingAt,
+                closeReason: "channel_missing_before_auto_close",
+                closeBlockedAt: missingAt,
+                missingChannelDetectedAt: missingAt,
+                transcriptStatus: "unavailable",
+              },
               $unset: { archiveProcessingAt: "" },
             });
           }
+          if (transcriptExists) {
+            await db.collection("orders").updateOne({ _id: candidate._id }, {
+              $set: { ticketClosedAt: missingAt, transcriptStatus: "archived", updatedAt: missingAt },
+              $unset: { closeProcessingAt: "", ticketCloseBlockedAt: "", ticketCloseBlockedReason: "" },
+            });
+            console.warn("[order-auto-close] Channel is missing, but transcript was already archived; order preserved:", candidate.orderCode, candidate.channelId);
+            continue;
+          }
           await db.collection("orders").updateOne({ _id: candidate._id }, {
-            $set: { ticketCloseBlockedAt: new Date(), ticketCloseBlockedReason: "channel_missing_before_archive", updatedAt: new Date() },
+            $set: {
+              ticketCloseBlockedAt: missingAt,
+              ticketCloseBlockedReason: "channel_missing_before_archive",
+              ticketChannelMissingAt: missingAt,
+              transcriptStatus: "unavailable",
+              updatedAt: missingAt,
+            },
             $unset: { closeProcessingAt: "" },
           });
-          console.error("[order-auto-close] Channel is confirmed missing; transcript cannot be reconstructed:", candidate.orderCode);
+          console.warn(
+            "[order-auto-close] Ticket channel is missing; order data preserved and auto-close will not retry:",
+            JSON.stringify({ orderCode: candidate.orderCode, channelId: candidate.channelId, transcriptStatus: "unavailable" }),
+          );
           continue;
         }
         await db.collection("orders").updateOne({ _id: candidate._id }, {
