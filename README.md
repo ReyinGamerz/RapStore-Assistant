@@ -62,7 +62,7 @@ QRIS and bank details are not bundled in the repository. If the corresponding co
 
 ## Components V2 and security
 - All newly implemented order/payment messages use Discord Components V2; they do not use classic embeds.
-- The bot needs permission to manage channels and channel permission overwrites in the configured support category.
+- The bot needs permission to manage channels and channel permission overwrites in the configured support category. For transcript archival/recovery, it also needs View Channel, Read Message History, Send Messages, and Attach Files in `TRANSCRIPT_CHANNEL_ID`.
 - Configure `FOUNDER_ROLE_ID` and `ADMIN_ROLE_ID` for the intended roles.
 - The bot uses the `GuildMessages` and privileged `MessageContent` intents to detect order-ticket attachments. Enable **Message Content Intent** in the Discord Developer Portal, or proof attachments may not be visible to the bot.
 - Keep the bot token, MongoDB URI, and private configuration out of GitHub. Configure MongoDB Atlas network access narrowly.
