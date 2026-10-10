@@ -111,7 +111,7 @@ async function handleFounderPanelButton(interaction) {
     if(!categories.length){await interaction.reply(v2Payload({content:"Belum ada kategori.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;}
     const menu=new StringSelectMenuBuilder().setCustomId("rapstore:panelchoose:editcategorymanage").setPlaceholder("Pilih kategori yang ingin diedit").setMinValues(1).setMaxValues(1).addOptions(categories.slice(0,25).map(cat=>({label:((cat.emoji?cat.emoji+" ":"")+cat.name).slice(0,100),value:encodeCategory(cat.name)})));
     const panel=buildPanel("EDIT KATEGORI","Pilih kategori yang ingin diubah.");panel.addActionRowComponents(new ActionRowBuilder().addComponents(menu));
-    await interaction.update({flags:MessageFlags.IsComponentsV2|MessageFlags.Ephemeral,components:[panel]});return;
+    await interaction.reply({flags:MessageFlags.IsComponentsV2|MessageFlags.Ephemeral,components:[panel]});return;
   }
   if (action === "add") { await showCategoryPicker(interaction,"addcategory"); return; }
   const db = getDatabase();
