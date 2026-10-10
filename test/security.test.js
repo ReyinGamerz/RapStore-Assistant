@@ -86,7 +86,7 @@ test("escapes user-controlled Markdown syntax in file names", () => {
   assert.equal(escapeDiscordMarkdown("a](<@&123>)_x_.png"), "a\\]\\(\\<@&123\\>\\)\\_x\\_\\.png");
 });
 
-import { expectedProofStatus } from "../src/security.js";
+import { expectedProofStatus, isVouchWindowExpired } from "../src/security.js";
 
 test("reconciles interrupted payment review from authoritative order state", () => {
   const proof = { _id: "proof-1", status: "pending" };
