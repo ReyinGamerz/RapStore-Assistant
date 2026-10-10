@@ -40,17 +40,20 @@ function encodeCategory(category) { return Buffer.from(category, "utf8").toStrin
 function decodeCategory(encoded) { try { return Buffer.from(encoded, "base64url").toString("utf8"); } catch { return ""; } }
 async function showCategoryPicker(interaction, mode, productId = "") {
   const categories = await getProductCategories();
+  const categoryProducts = await getDatabase().collection("products").find({}).project({category:1,categoryEmoji:1}).toArray();
+  const categoryEmojis = new Map();
+  for (const product of categoryProducts) if (product.category && product.categoryEmoji && !categoryEmojis.has(product.category)) categoryEmojis.set(product.category, safeText(product.categoryEmoji,100));
   const menu = new StringSelectMenuBuilder()
     .setCustomId("rapstore:panelchoose:" + mode + (productId ? ":" + productId : ""))
     .setPlaceholder("Pilih kategori")
     .setMinValues(1).setMaxValues(1)
     .addOptions([
-      ...categories.map(category => ({label: category.slice(0,100), value: encodeCategory(category), description: "Gunakan kategori ini"})),
+      ...categories.map(category => ({label: ((categoryEmojis.get(category) ? categoryEmojis.get(category) + " " : "") + category).slice(0,100), value: encodeCategory(category), description: "Gunakan kategori ini"})),
       {label:"＋ Buat kategori baru",value:"__new__",description:"Masukkan nama kategori baru"},
     ]);
   const panel = buildPanel("PILIH KATEGORI", "Pilih kategori yang sudah ada agar penulisan konsisten, atau buat kategori baru.");
   panel.addActionRowComponents(new ActionRowBuilder().addComponents(menu));
-  await interaction.reply({flags:MessageFlags.IsComponentsV2|MessageFlags.Ephemeral,components:[panel]});
+  await interaction.update({flags:MessageFlags.IsComponentsV2|MessageFlags.Ephemeral,components:[panel]});
 }
 function buildProductModal(action, category, product = null, allowNewCategory = false) {
   const suffix = product ? ":" + String(product._id) : "";
@@ -59,8 +62,10 @@ function buildProductModal(action, category, product = null, allowNewCategory = 
   const specs = [
     ["nama","Nama produk",TextInputStyle.Short,true,100,product?.name || ""],
     ["harga","Harga (Rupiah)",TextInputStyle.Short,true,12,product ? String(product.price) : ""],
+    ["emoji_produk","Emoji produk (opsional)",TextInputStyle.Short,false,100,product?.emoji || ""],
   ];
   if (allowNewCategory) specs.push(["kategori","Kategori baru",TextInputStyle.Short,true,80,product?.category || "Umum"]);
+  specs.push(["emoji_kategori","Emoji kategori (opsional)",TextInputStyle.Short,false,100,product?.categoryEmoji || ""]);
   specs.push(["deskripsi","Deskripsi",TextInputStyle.Paragraph,false,500,product?.description || ""]);
   for (const [id,label,style,required,max,value] of specs) {
     const input = new TextInputBuilder().setCustomId(id).setLabel(label).setStyle(style).setRequired(required).setMaxLength(max);
@@ -135,15 +140,17 @@ async function handleFounderPanelModal(interaction) {
   const categoryField=interaction.fields.fields?.get("kategori");
   const category=safeText(categoryField ? interaction.fields.getTextInputValue("kategori") : decodeCategory(categoryToken)||"Umum",80)||"Umum";
   const description=safeText(interaction.fields.getTextInputValue("deskripsi")||"",500);
+  const emoji=safeText(interaction.fields.getTextInputValue("emoji_produk")||"",100);
+  const categoryEmoji=safeText(interaction.fields.getTextInputValue("emoji_kategori")||"",100);
   if(!name||!Number.isSafeInteger(price)||price<1||!category){await interaction.reply(v2Payload({content:"Nama, kategori, dan harga wajib valid. Harga harus berupa angka positif.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;}
   if(action==="add"){
-    const now=new Date();const result=await db.collection("products").insertOne({name,price,category,description,active:true,currency:"IDR",createdAt:now,updatedAt:now,createdBy:interaction.user.id});
+    const now=new Date();const result=await db.collection("products").insertOne({name,price,category,emoji,categoryEmoji,description,active:true,currency:"IDR",createdAt:now,updatedAt:now,createdBy:interaction.user.id});
     await audit("product.created",interaction,{productId:String(result.insertedId),source:"panel"});
     await interaction.reply(v2Payload({content:"Produk berhasil dibuat dalam kategori **"+category+"**. ID: "+result.insertedId,flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;
   }
   const id=parts[3];const {ObjectId}=await import("mongodb");
   if(!ObjectId.isValid(id)){await interaction.reply(v2Payload({content:"ID produk tidak valid.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;}
-  const result=await db.collection("products").updateOne({_id:new ObjectId(id)},{$set:{name,price,category,description,updatedAt:new Date(),updatedBy:interaction.user.id}});
+  const result=await db.collection("products").updateOne({_id:new ObjectId(id)},{$set:{name,price,category,emoji,categoryEmoji,description,updatedAt:new Date(),updatedBy:interaction.user.id}});
   if(!result.matchedCount){await interaction.reply(v2Payload({content:"Produk tidak ditemukan.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;}
   await audit("product.updated",interaction,{productId:id,source:"panel"});
   await interaction.reply(v2Payload({content:"Produk berhasil diperbarui.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
@@ -171,7 +178,8 @@ async function renderCatalogPanel(interaction, selectedCategory = "", selectedPr
   if (!category) {
     lines.push("Pilih kategori dari menu di bawah untuk melihat katalog produk.");
   } else {
-    lines.push("**Category:** " + category, "");
+    const categoryEmoji = list.find(p => p.categoryEmoji)?.categoryEmoji || "";
+    lines.push("**Category:** " + (categoryEmoji ? safeText(categoryEmoji,100) + " " : "") + category, "");
     if (!list.length) {
       lines.push("Belum ada produk aktif di kategori ini.");
     } else {
@@ -182,7 +190,7 @@ async function renderCatalogPanel(interaction, selectedCategory = "", selectedPr
         const displayName = isServerBoost
           ? name.replace(/\b(\d+x)\b/g, "`$1`").replace(/\b(\d+)\s+Month\b/gi, "`$1` Month")
           : name;
-        lines.push("**" + displayName + "**");
+        lines.push("**" + (safeText(product.emoji,100) ? safeText(product.emoji,100) + " " : "") + displayName + "**");
         lines.push("**Harga:** `" + formatPrice(retail).replace(/^Rp\s*/, "Rp") + "`", "");
       }
     }
