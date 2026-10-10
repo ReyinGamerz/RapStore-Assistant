@@ -408,10 +408,12 @@ async function archiveTicketImages(archiveChannel, messages, ticket, archiveKey,
       if (!attachment?.url || !isImageAttachment(attachment) || seenUrls.has(attachment.url)) continue;
       seenUrls.add(attachment.url);
       const token = String(attachment.id || message.id + "-" + photos.length).replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 100);
+      const originalName = clean(attachment.name || "foto-tiket.png", 160).replace(/[\\/]/g, "_");
       photos.push({
         messageId: message.id,
         attachment,
         marker: archiveKey + "-photo-" + token,
+        archiveName: ("ticket-" + token + "-" + originalName).slice(0, 240),
       });
     }
   }
@@ -420,6 +422,7 @@ async function archiveTicketImages(archiveChannel, messages, ticket, archiveKey,
   if (!photos.length) return urls;
 
   // Reuse photos already copied during an interrupted archive attempt.
+  // New batches carry a marker for every image and use unique filenames to map URLs safely.
   const markerLookup = new Map(photos.map(photo => ["[archive-photo-key:" + photo.marker + "]", photo]));
   let before;
   for (let page = 0; page < 10; page++) {
@@ -428,8 +431,11 @@ async function archiveTicketImages(archiveChannel, messages, ticket, archiveKey,
     for (const message of batch.values()) {
       const content = String(message.content || "");
       for (const [marker, photo] of markerLookup) {
-        if (!content.includes(marker)) continue;
-        const archived = message.attachments?.first();
+        if (urls.has(photo.attachment.url) || !content.includes(marker)) continue;
+        const archived = message.attachments?.find(item => item.name === photo.archiveName)
+          // Backward compatibility with old archives, which stored one image per message
+          // using the original filename rather than the new unique archive filename.
+          || (message.attachments?.size === 1 ? message.attachments.first() : null);
         if (!archived?.url) {
           throw new Error("Foto arsip ditemukan dengan penanda yang benar, tetapi lampirannya tidak terbaca. Tiket dipertahankan.");
         }
@@ -440,19 +446,24 @@ async function archiveTicketImages(archiveChannel, messages, ticket, archiveKey,
     if (batch.size < 100 || photos.every(photo => urls.has(photo.attachment.url))) break;
   }
 
-  for (const photo of photos) {
-    if (urls.has(photo.attachment.url)) continue;
-    const name = clean(photo.attachment.name || "foto-tiket.png", 180).replace(/[\\/]/g, "_");
+  // Discord accepts up to 10 files per message. Upload images in batches so the
+  // transcript channel stays tidy instead of creating one message per image.
+  const missingPhotos = photos.filter(photo => !urls.has(photo.attachment.url));
+  for (let offset = 0; offset < missingPhotos.length; offset += 10) {
+    const batch = missingPhotos.slice(offset, offset + 10);
+    const markers = batch.map(photo => "[archive-photo-key:" + photo.marker + "]");
     const archivedMessage = await archiveChannel.send({
-      content: "Foto tiket #" + baseName + " [archive-photo-key:" + photo.marker + "]",
-      files: [{ attachment: photo.attachment.url, name }],
+      content: "Foto tiket #" + baseName + " (" + (offset + 1) + "–" + (offset + batch.length) + " dari " + missingPhotos.length + ")\\n" + markers.join("\\n"),
+      files: batch.map(photo => ({ attachment: photo.attachment.url, name: photo.archiveName })),
       allowedMentions: { parse: [], users: [], roles: [] },
     });
-    const archived = archivedMessage.attachments?.first();
-    if (!archived?.url) {
-      throw new Error("Discord tidak mengembalikan URL setelah mengarsipkan foto '" + name + "'. Tiket dipertahankan.");
+    for (const photo of batch) {
+      const archived = archivedMessage.attachments?.find(item => item.name === photo.archiveName);
+      if (!archived?.url) {
+        throw new Error("Discord tidak mengembalikan URL setelah mengarsipkan foto '" + photo.archiveName + "'. Tiket dipertahankan.");
+      }
+      urls.set(photo.attachment.url, archived.url);
     }
-    urls.set(photo.attachment.url, archived.url);
   }
   return urls;
 }
