@@ -52,21 +52,23 @@ async function getProductCategories() {
 }
 function encodeCategory(category) { return Buffer.from(category, "utf8").toString("base64url"); }
 function decodeCategory(encoded) { try { return Buffer.from(encoded, "base64url").toString("utf8"); } catch { return ""; } }
-async function showCategoryPicker(interaction, mode, productId = "") {
+async function showCategoryPicker(interaction, mode, productId = "", responseMode = "reply") {
   const categories = await getProductCategories();
-  const categoryProducts = await getDatabase().collection("products").find({}).project({category:1,categoryEmoji:1}).toArray();
-  const categoryEmojis = new Map();
-  for (const product of categoryProducts) if (product.category && product.categoryEmoji && !categoryEmojis.has(product.category)) categoryEmojis.set(product.category, safeText(product.categoryEmoji,100));
   const menu = new StringSelectMenuBuilder()
     .setCustomId("rapstore:panelchoose:" + mode + (productId ? ":" + productId : ""))
     .setPlaceholder("Pilih kategori")
     .setMinValues(1).setMaxValues(1)
-    .addOptions([
-      ...categories.map(category => ({label: ((category.emoji || categoryEmojis.get(category.name) || "") + (category.emoji || categoryEmojis.get(category.name) ? " " : "") + category.name).slice(0,100), value: encodeCategory(category.name), description: "Gunakan kategori ini"})),
-    ]);
-  const panel = buildPanel("PILIH KATEGORI", "Pilih kategori yang sudah ada agar penulisan konsisten, atau buat kategori baru.");
+    .addOptions(categories.map(category => ({
+      label: ((category.emoji ? category.emoji + " " : "") + category.name).slice(0, 100),
+      value: encodeCategory(category.name),
+      description: "Gunakan kategori ini",
+    })));
+  const panel = buildPanel("PILIH KATEGORI", "Pilih kategori yang sudah ada. Untuk membuat atau mengganti nama kategori, gunakan tombol kategori di panel utama.");
   panel.addActionRowComponents(new ActionRowBuilder().addComponents(menu));
-  await interaction.update({flags:MessageFlags.IsComponentsV2|MessageFlags.Ephemeral,components:[panel]});
+  const payload = { flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral, components: [panel] };
+  if (responseMode === "editReply") await interaction.editReply(payload);
+  else if (responseMode === "followUp") await interaction.followUp(payload);
+  else await interaction.reply(payload);
 }
 function buildProductModal(action, category, product = null, allowNewCategory = false) {
   const suffix = product ? ":" + String(product._id) : "";
@@ -113,7 +115,11 @@ async function handleFounderPanelButton(interaction) {
     const panel=buildPanel("EDIT KATEGORI","Pilih kategori yang ingin diubah.");panel.addActionRowComponents(new ActionRowBuilder().addComponents(menu));
     await interaction.reply({flags:MessageFlags.IsComponentsV2|MessageFlags.Ephemeral,components:[panel]});return;
   }
-  if (action === "add") { await showCategoryPicker(interaction,"addcategory"); return; }
+  if (action === "add") {
+    await interaction.deferReply({ flags: EPHEMERAL | MessageFlags.IsComponentsV2 });
+    await showCategoryPicker(interaction, "addcategory", "", "editReply");
+    return;
+  }
   const db = getDatabase();
   if (action === "list") {
     const list = await db.collection("products").find({}).sort({name:1}).limit(15).toArray();
@@ -143,11 +149,19 @@ async function handleFounderPanelSelect(interaction) {
   }
   const {ObjectId}=await import("mongodb");
   if (mode === "editproduct") {
-    const id=interaction.values[0];
-    if(!ObjectId.isValid(id)){await interaction.reply(v2Payload({content:"ID produk tidak valid.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;}
-    const product=await getDatabase().collection("products").findOne({_id:new ObjectId(id)});
-    if(!product){await interaction.reply(v2Payload({content:"Produk tidak ditemukan.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;}
-    await showCategoryPicker(interaction,"editcategory",id); return;
+    await interaction.deferUpdate();
+    const id = interaction.values[0];
+    if (!ObjectId.isValid(id)) {
+      await interaction.followUp(v2Payload({content:"ID produk tidak valid.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
+      return;
+    }
+    const product = await getDatabase().collection("products").findOne({_id:new ObjectId(id)});
+    if (!product) {
+      await interaction.followUp(v2Payload({content:"Produk tidak ditemukan.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
+      return;
+    }
+    await showCategoryPicker(interaction, "editcategory", id, "followUp");
+    return;
   }
   if (mode === "editcategory") {
     const id=parts[3], chosen=interaction.values[0];
@@ -228,7 +242,8 @@ async function renderCatalogPanel(interaction, selectedCategory = "", selectedPr
   if (!category) {
     lines.push("Pilih kategori dari menu di bawah untuk melihat katalog produk.");
   } else {
-    const categoryEmoji = list.find(p => p.categoryEmoji)?.categoryEmoji || "";
+    const categoryRecord = await db.collection("categories").findOne({ name: category });
+    const categoryEmoji = categoryRecord?.emoji || list.find(p => p.categoryEmoji)?.categoryEmoji || "";
     lines.push("**Category:** " + (categoryEmoji ? safeText(categoryEmoji,100) + " " : "") + category, "");
     if (!list.length) {
       lines.push("Belum ada produk aktif di kategori ini.");
