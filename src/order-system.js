@@ -103,7 +103,8 @@ async function buildOrderPanel(order) {
     "**Harga:** " + price(order.totalPrice) + "\n" +
     "**Status:** " + clean(order.status, 30) +
     (order.paymentStatus === "pending_review" ? "\n**Pembayaran:** Menunggu pemeriksaan admin" : "") +
-    (order.paymentStatus === "verified" ? "\n**Pembayaran:** Terverifikasi" : ""),
+    (order.paymentStatus === "verified" ? "\n**Pembayaran:** Terverifikasi" : "") +
+    (order.paymentStatus === "rejected" ? "\n**Pembayaran:** Bukti ditolak, silakan kirim ulang" : ""),
   ));
   divider(container);
   const categoryOptions = categories.map(name => ({
@@ -269,9 +270,14 @@ export async function handleOrderInteraction(interaction, client) {
         { orderId: String(order._id), _id: { $ne: proof._id }, status: "pending" },
         { $set: { status: "superseded", updatedAt: new Date() } },
       );
-      await db.collection("orders").updateOne({ _id: order._id, status: "ON HOLD" }, {
+      const orderUpdate = await db.collection("orders").updateOne({ _id: order._id, status: "ON HOLD" }, {
         $set: { status: "PROSES", paymentStatus: "verified", paidAt: new Date(), reviewedBy: interaction.user.id, updatedAt: new Date() },
       });
+      if (!orderUpdate.modifiedCount) {
+        await db.collection("payment_proofs").updateOne({ _id: proof._id, status: "accepted" }, { $set: { status: "superseded", updatedAt: new Date() } });
+        await replyNotice(interaction, "PESANAN TIDAK AKTIF", "Status pesanan sudah berubah. Bukti ini tidak dapat digunakan untuk memproses pesanan.");
+        return;
+      }
       const updated = await db.collection("orders").findOne({ _id: order._id });
       await refreshOrderMessage(updated, client);
       await interaction.update(v2(buildPanel(
@@ -297,9 +303,16 @@ export async function handleOrderInteraction(interaction, client) {
       await replyNotice(interaction, "BUKTI SUDAH DIPROSES", "Admin lain sudah memeriksa bukti ini.");
       return;
     }
-    await db.collection("orders").updateOne({ _id: order._id, status: "ON HOLD" }, {
+    const rejectedOrderUpdate = await db.collection("orders").updateOne({ _id: order._id, status: "ON HOLD" }, {
       $set: { paymentStatus: "rejected", updatedAt: new Date() },
     });
+    if (!rejectedOrderUpdate.modifiedCount) {
+      await db.collection("payment_proofs").updateOne({ _id: proof._id, status: "rejected" }, { $set: { status: "superseded", updatedAt: new Date() } });
+      await replyNotice(interaction, "PESANAN TIDAK AKTIF", "Status pesanan sudah berubah. Bukti ini tidak dapat ditolak untuk pesanan yang sudah tidak aktif.");
+      return;
+    }
+    const rejectedOrder = await db.collection("orders").findOne({ _id: order._id });
+    await refreshOrderMessage(rejectedOrder, client);
     await interaction.update(v2(buildPanel(
       "BUKTI TRANSFER TIDAK VALID",
       "Diperiksa oleh <@" + interaction.user.id + ">.\nPengguna telah diminta mengirim ulang bukti transfer.",
@@ -390,9 +403,13 @@ export async function handleOrderInteraction(interaction, client) {
       await replyNotice(interaction, "STATUS TIDAK SESUAI", "Pesanan hanya bisa ditandai DONE dari status PROSES.");
       return;
     }
-    await db.collection("orders").updateOne({ _id: order._id, status: "PROSES" }, {
+    const completed = await db.collection("orders").updateOne({ _id: order._id, status: "PROSES" }, {
       $set: { status: "DONE", completedAt: new Date(), completedBy: interaction.user.id, updatedAt: new Date() },
     });
+    if (!completed.modifiedCount) {
+      await replyNotice(interaction, "STATUS BERUBAH", "Pesanan tidak lagi berstatus PROSES. Muat ulang panel dan coba lagi.");
+      return;
+    }
     const updated = await db.collection("orders").findOne({ _id: order._id });
     await interaction.update(await buildOrderPanel(updated));
     await interaction.channel.send(v2(buildPanel("PESANAN SELESAI", "Pesanan **" + clean(order.orderCode, 40) + "** telah ditandai **DONE** oleh Founder/Admin.")));
@@ -493,7 +510,7 @@ export async function handleOrderInteraction(interaction, client) {
   }
 }
 
-export async function handleOrderMessage(message) {
+export async function handleOrderMessage(message, client) {
   if (!message?.guild || message.author?.bot || !message.channel || !message.attachments?.size) return;
   const db = getDatabase();
   const ticket = await db.collection("tickets").findOne({
@@ -522,6 +539,8 @@ export async function handleOrderMessage(message) {
   await db.collection("orders").updateOne({ _id: order._id, status: "ON HOLD" }, {
     $set: { paymentStatus: "pending_review", latestProofId: String(proofResult.insertedId), updatedAt: new Date() },
   });
+  const refreshedOrder = await db.collection("orders").findOne({ _id: order._id });
+  await refreshOrderMessage(refreshedOrder, client);
   const roleMentions = [config.ids.founderRole, config.ids.adminRole].filter(Boolean);
   const proofLines = attachments.map((attachment, index) => "[" + (index + 1) + ". " + attachment.name + "](" + attachment.url + ")");
   const panel = buildPanel("VERIFIKASI BUKTI TRANSFER",
