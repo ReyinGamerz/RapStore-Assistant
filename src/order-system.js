@@ -1991,27 +1991,13 @@ export async function handleOrderMessage(message, client) {
     });
     return;
   }
-  await db.collection("payment_proofs").updateMany(
-    { orderId: String(order._id), _id: { $ne: proofResult.insertedId }, status: "pending" },
-    { $set: { status: "superseded", updatedAt: new Date() } },
-  );
+  await supersedePendingProofs(db, client, order._id, proofResult.insertedId, "newer_proof_submitted");
   const refreshedOrder = await db.collection("orders").findOne({ _id: order._id });
-  await refreshOrderMessage(refreshedOrder, client);
-  const roleMentions = [config.ids.founderRole, config.ids.adminRole].filter(Boolean);
-  const proofLines = attachments.map((attachment, index) => "[" + (index + 1) + ". " + attachment.name + "](" + attachment.url + ")");
-  const panel = buildPanel("VERIFIKASI BUKTI TRANSFER",
-    roleMentions.map(id => "<@&" + id + ">").join(" ") + "\n" +
-    "**Pesanan:** " + clean(order.orderCode, 40) + "\n**Pengirim:** <@" + message.author.id + ">\n" +
-    "**Metode:** " + (order.paymentMethod === "qris" ? "QRIS" : "BANK") + "\n" +
-    "**Nominal yang harus dibayar:** " + price(order.totalPrice) + "\n\n**Lampiran bukti:**\n" + proofLines.join("\n"));
-  panel.addActionRowComponents(new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId("rapstore:payment:process:" + String(proofResult.insertedId)).setLabel("PROSES").setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId("rapstore:payment:invalid:" + String(proofResult.insertedId)).setLabel("TIDAK VALID").setStyle(ButtonStyle.Danger),
-  ));
-  await message.channel.send({
-    flags: V2, components: [panel],
-    allowedMentions: { roles: roleMentions, users: [], parse: [] },
-  });
+  // UI refresh is best-effort and must not prevent the proof review card from being delivered.
+  await refreshOrderMessage(refreshedOrder, client).catch(error =>
+    console.error("[payment-proof-order-refresh]", error?.message || error));
+  await ensurePendingPaymentNotices(client, db).catch(error =>
+    console.error("[payment-proof-notice]", error?.message || error));
   await db.collection("audit_logs").insertOne({
     action: "payment.proof_submitted", actorId: message.author.id, guildId: message.guild.id,
     details: { orderId: String(order._id), orderCode: order.orderCode, proofId: String(proofResult.insertedId), attachmentCount: attachments.length },
