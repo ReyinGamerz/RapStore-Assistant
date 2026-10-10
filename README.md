@@ -35,7 +35,11 @@ For a new install, run `npm install`, copy `.env.example` to `.env`, then set `D
 - The category, product, and ticket-purpose menus remain below the list. `ORDER SEKARANG` and `TANYA-TANYA DULU` remain temporarily.
 
 ## Out of scope
-Standalone order, stock, payment, delivery, ticket-close, vouch, store-info, and ping commands are not active. Reseller pricing and stock management have been removed from the panel.
+Standalone order, stock, payment, delivery, ticket-close, vouch, store-info, and ping slash commands are not active. Ticket creation is handled from the catalog's `ORDER SEKARANG` and `TANYA-TANYA DULU` menu options.
+- Each user can have only one open ticket per server, regardless of ticket type.
+- Tickets are created under `SUPPORT_CATEGORY_ID` and include the selected active product when one was selected.
+- The ticket owner and Founder/Admin can request closure. Closing requires confirmation, marks the ticket closed in MongoDB, locks the owner's access, and renames the channel with a `closed-` prefix.
+- The bot needs permission to manage channels and channel permission overwrites in the configured support category.
 
 ## Security
 Keep the bot token and MongoDB URI private. Configure MongoDB Atlas network access narrowly. Use the intended Founder/Admin role IDs for your server.
