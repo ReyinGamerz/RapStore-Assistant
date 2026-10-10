@@ -27,6 +27,22 @@ function v2Payload(payload) {
 }
 function v2EditPayload(content) { return buildComponentsOnly(content); }
 function logError(context, error) { console.error(`[${context}]`, error instanceof Error ? error.message : "Unknown error"); }
+async function fetchChannelOrNull(discordClient, channelId) {
+  try {
+    return await discordClient.channels.fetch(channelId);
+  } catch (error) {
+    if (Number(error?.code) === 10003) return null;
+    throw error;
+  }
+}
+async function fetchMessageOrNull(channel, messageId) {
+  try {
+    return await channel.messages.fetch(messageId);
+  } catch (error) {
+    if ([10003, 10008].includes(Number(error?.code))) return null;
+    throw error;
+  }
+}
 function hasStaffRole(member) {
   return isStaffMember(member, [config.ids.founderRole, config.ids.adminRole]);
 }
@@ -230,8 +246,8 @@ async function upsertPersistentPanel(interaction, type, payload) {
   let record = await collection.findOne({ guildId: interaction.guildId, type });
   let message = null;
   if (record) {
-    const channel = await client.channels.fetch(record.channelId).catch(() => null);
-    if (channel) message = await channel.messages.fetch(record.messageId).catch(() => null);
+    const channel = await fetchChannelOrNull(client, record.channelId);
+    if (channel?.messages) message = await fetchMessageOrNull(channel, record.messageId);
     if (message) await message.edit(payload);
   }
   if (!message) {
@@ -274,12 +290,12 @@ async function refreshPersistentPanels(readyClient, onlyType = null) {
     try {
       // Remove old public management panels left by versions that exposed /panel.
       if (record.type === "panel") {
-        const oldChannel = await readyClient.channels.fetch(record.channelId).catch(() => null);
+        const oldChannel = await fetchChannelOrNull(readyClient, record.channelId);
         if (!oldChannel?.messages) {
           console.error("[persistent-panel] Cannot access legacy public panel channel; keeping cleanup record to retry.");
           continue;
         }
-        const oldMessage = await oldChannel.messages.fetch(record.messageId).catch(() => null);
+        const oldMessage = await fetchMessageOrNull(oldChannel, record.messageId);
         if (oldMessage) {
           try {
             await oldMessage.delete();
@@ -297,9 +313,9 @@ async function refreshPersistentPanels(readyClient, onlyType = null) {
         ? await buildCatalogPayload("", "")
         : null;
       if (!payload) continue;
-      const channel = await readyClient.channels.fetch(record.channelId).catch(() => null);
+      const channel = await fetchChannelOrNull(readyClient, record.channelId);
       if (!channel || typeof channel.send !== "function") { console.error("[persistent-panel] Saved channel unavailable for " + record.type); continue; }
-      let message = await channel.messages.fetch(record.messageId).catch(() => null);
+      let message = await fetchMessageOrNull(channel, record.messageId);
       if (message) {
         await message.edit(payload);
       } else {
