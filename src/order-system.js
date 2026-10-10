@@ -135,7 +135,8 @@ async function buildOrderPanel(order) {
     "**Product:** " + (order.productName ? clean(order.productName, 100) : "Belum dipilih") + "\n" +
     "**Amount:** " + Number(order.amount || 1) + "\n" +
     "**Harga:** " + price(order.totalPrice) + "\n" +
-    "**Status:** " + clean(order.status, 30) +
+    "**Status:** " + clean(order.status, 30) + "\n" +
+    "**ID:** " + clean(order.ticketCode || order.orderCode, 20) +
     (order.paymentStatus === "pending_review" ? "\n**Pembayaran:** Menunggu pemeriksaan admin" : "") +
     (order.paymentStatus === "verified" ? "\n**Pembayaran:** Terverifikasi" : "") +
     (order.paymentStatus === "rejected" ? "\n**Pembayaran:** Bukti ditolak, silakan kirim ulang" : ""),
@@ -513,6 +514,7 @@ export async function archiveAndDeleteTicket({ channel, ticket, client, closedBy
     messages.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
     const baseName = clean(ticket.ticketPrefix && Number.isInteger(ticket.ticketNumber)
       ? ticket.ticketPrefix + "-" + ticket.ticketNumber : channel.name.replace(/^closed-/, ""), 80).replace(/[^a-zA-Z0-9_-]/g, "-");
+    const ticketCode = clean(ticket.ticketCode || "", 20).replace(/[^a-zA-Z0-9&$!@%+_-]/g, "");
     // Copy image attachments into the transcript channel first, then use those new Discord CDN URLs in the HTML.
     // If any image cannot be archived, keep the original ticket so no proof/photo is lost.
     const archivedImageUrls = await archiveTicketImages(archiveChannel, messages, ticket, archiveKey, baseName);
@@ -585,13 +587,16 @@ export async function archiveAndDeleteTicket({ channel, ticket, client, closedBy
       '@media(max-width:600px){.topbar{padding:13px 14px}.layout{padding:16px 14px 32px}.message{gap:9px}.avatar-wrap{flex-basis:34px}.avatar{width:34px;height:34px}.message-header{gap:5px}.username{display:none}.attachment-image{max-height:380px}.discord-embed{padding:10px}.ticket-title{font-size:18px}}' +
       '</style></head><body><div class="topbar"><div class="brand">💬 RapStore — Ticket Transcript</div><div class="subtitle">' +
       escapeHtml(guildName) + ' • #' + escapeHtml(channel.name) + '</div></div><main class="layout"><section class="ticket-info"><div class="ticket-title"># ' +
-      escapeHtml(baseName) + '</div><div class="info-grid"><span><b>Pesan:</b> ' + messages.length +
+      escapeHtml(baseName) + '</div><div class="info-grid">' +
+      (ticketCode ? '<span><b>ID Tiket:</b> ' + escapeHtml(ticketCode) + '</span>' : '') + '<span><b>Pesan:</b> ' + messages.length +
       '</span><span><b>Ditutup oleh:</b> ' + escapeHtml(effectiveClosedBy ? '<@' + effectiveClosedBy + '>' : "Sistem") +
       '</span><span><b>Alasan:</b> ' + escapeHtml(effectiveReason) + '</span><span><b>Waktu arsip:</b> ' +
       escapeHtml(new Date().toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })) + ' WIB</span></div></section>' +
       (rows || '<p>Channel ini tidak memiliki pesan yang dapat diarsipkan.</p>') +
       '<div class="footer">Transcript dibuat oleh RapStore Assistant • Tampilan arsip tidak dapat memuat ulang pesan yang sudah dihapus dari Discord.</div></main></body></html>';
-    const filename = baseName + "-#" + transcriptSuffix() + ".html";
+    const filename = ticketCode
+      ? baseName + "-" + ticketCode + ".html"
+      : baseName + "-#" + transcriptSuffix() + ".html";
 
     // If a previous attempt uploaded the file but failed before saving its message ID,
     // search recent archive history for the stable marker before uploading again.
@@ -855,15 +860,17 @@ export function startOrderMaintenance(client) {
   timer.unref?.();
 }
 
-export async function initializeOrderTicket({ channel, interaction, ticketNumber, ticketId, selectedProduct }) {
+export async function initializeOrderTicket({ channel, interaction, ticketNumber, ticketId, ticketCode, selectedProduct }) {
   const db = getDatabase();
   const product = selectedProduct && selectedProduct.active !== false ? selectedProduct : null;
   const unitPrice = product ? Number(product.price || 0) : 0;
   if (product && (!Number.isSafeInteger(unitPrice) || unitPrice < 1)) throw new Error("Selected product has an invalid price.");
-  const orderCode = "RAP-" + ticketNumber + "-" + channel.id.slice(-4);
+  const stableTicketCode = clean(ticketCode, 20);
+  if (!stableTicketCode) throw new Error("A unique ticket code is required for every order.");
+  const orderCode = stableTicketCode;
   const now = new Date();
   const result = await db.collection("orders").insertOne({
-    orderCode, guildId: interaction.guildId, ticketId: String(ticketId), channelId: channel.id,
+    orderCode, ticketCode: stableTicketCode, guildId: interaction.guildId, ticketId: String(ticketId), channelId: channel.id,
     buyerId: interaction.user.id, category: product ? clean(product.category || "Umum", 80) : "",
     productId: product ? String(product._id) : null, productName: product ? clean(product.name, 100) : null,
     unitPrice, amount: 1, totalPrice: unitPrice, status: "ON HOLD", paymentStatus: "unpaid",

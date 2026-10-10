@@ -4,6 +4,7 @@ import {
   StringSelectMenuBuilder, SeparatorBuilder, TextDisplayBuilder, TextInputBuilder,
   TextInputStyle,
 } from "discord.js";
+import { randomBytes } from "node:crypto";
 import { config } from "./config.js";
 import { connectDatabase, closeDatabase, getDatabase } from "./database.js";
 import { refreshGlobalCommands } from "./global-commands.js";
@@ -32,6 +33,24 @@ async function audit(action, interaction, details = {}) {
 }
 function safeText(value, max = 500) {
   return String(value ?? "").replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, max);
+}
+async function allocateTicketCode() {
+  const db = getDatabase();
+  const tickets = db.collection("tickets");
+  const orders = db.collection("orders");
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789&$!@%+";
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const length = 5 + (randomBytes(1)[0] % 6);
+    const bytes = randomBytes(length);
+    let code = "";
+    for (const byte of bytes) code += alphabet[byte % alphabet.length];
+    const [ticketExists, orderExists] = await Promise.all([
+      tickets.findOne({ ticketCode: code }, { projection: { _id: 1 } }),
+      orders.findOne({ $or: [{ ticketCode: code }, { orderCode: code }] }, { projection: { _id: 1 } }),
+    ]);
+    if (!ticketExists && !orderExists) return code;
+  }
+  throw new Error("Gagal membuat ID tiket unik setelah beberapa percobaan.");
 }
 function buildCategoryModal(action, current = null) {
   const reference = current ? (current._id ? "id-" + String(current._id) : "name-" + encodeCategory(current.name)) : "";
@@ -678,11 +697,12 @@ async function handleCatalogSelection(interaction) {
     }
     const isOrder = ticketType === "order_now";
     const ticketNumber = await allocateTicketNumber(isOrder ? "order" : "question");
+    const ticketCode = await allocateTicketCode();
     const channel = await interaction.guild.channels.create({
       name: ticketNumber.channelName,
       type: ChannelType.GuildText,
       parent: config.ids.supportCategory || undefined,
-      topic: "RapStore " + ticketType + "; buyer " + interaction.user.id,
+      topic: "RapStore " + ticketType + "; ticket " + ticketCode + "; buyer " + interaction.user.id,
       permissionOverwrites: [
         { id: interaction.guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
         { id: interaction.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles] },
@@ -699,6 +719,7 @@ async function handleCatalogSelection(interaction) {
         type: ticketType,
         ticketNumber: ticketNumber.number,
         ticketPrefix: isOrder ? "rap" : "tanya",
+        ticketCode,
         productId: selectedProduct ? String(selectedProduct._id) : null,
         productName: selectedProduct ? safeText(selectedProduct.name, 100) : null,
         status: "open",
@@ -710,6 +731,7 @@ async function handleCatalogSelection(interaction) {
           interaction,
           ticketNumber: ticketNumber.number,
           ticketId: ticketInsert.insertedId,
+          ticketCode,
           selectedProduct,
         });
       } else {
