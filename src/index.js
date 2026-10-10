@@ -702,7 +702,7 @@ async function handleCatalogSelection(interaction) {
       try {
         liveChannel = await interaction.guild.channels.fetch(activeTicket.channelId);
       } catch (error) {
-        if (Number(error?.code) === 10003 || Number(error?.code) === 10008) liveChannel = null;
+        if (Number(error?.code) === 10003) liveChannel = null;
         else throw error;
       }
       if (liveChannel) {
