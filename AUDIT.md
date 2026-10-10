@@ -19,6 +19,10 @@ Confirmed findings on the audited base:
 - **P2 — Slash-command architecture mismatch:** `src/global-commands.js` registered guild-scoped commands and cleared global commands, contradicting the requested global-only setup without `DISCORD_GUILD_ID`.
 - **P2 — Maintenance shutdown leak:** the 30-second maintenance interval was not cleared and an active run was not awaited before MongoDB closed.
 - **P2 — Shared catalog selection:** category/product changes edited one public message for everyone, allowing concurrent users to interfere with the visible selection.
+- **P2 — Vouch deadline bypass:** the deadline was checked when opening the vouch modal but not checked again when submitting it, allowing a modal opened just before the deadline to submit late.
+- **P2 — Audit-log write failures were silent:** multiple order/payment/ticket audit-log writes swallowed errors, hiding loss of audit trail.
+- **P3 — Public testimonial formatting:** user-supplied testimonial Markdown was inserted into a public Components V2 message without Markdown escaping (mentions were already disabled).
+- **P3 — Dead configuration/code:** `LOG_LEVEL`, `v2SendPayload`, and an unused `ticketNumber` initializer argument were present but unused.
 - **P2 — No automatic startup validation:** `npm start` launched the bot without running tests or syntax checks first.
 - **P2 — Dependency reproducibility:** the audited repository has no `package-lock.json`, so transitive dependency versions are not pinned.
 - **P2 — Secret-history review limitation:** current tracked files were inspected for configuration/secret handling, but the full commit history and GitHub secret-scanning results were not available for exhaustive verification.
@@ -31,7 +35,7 @@ The audit branch fixes the confirmed runtime defects, shared catalog selection b
 |---|---|---|---|
 | `src/index.js` | Startup, interaction routing, panels, catalog, ticket creation/close, Discord events | REVIEWED — FIXED, CI PASS | Found undeclared `ObjectId` and a temporal-dead-zone bug in stale-ticket recovery; live interaction flows not tested |
 | `src/order-system.js` | Order/payment/vouch/transcript lifecycle and maintenance | REVIEWED — FIXED, CI PASS | Inspected authorization/state transitions; maintenance now stops and awaits an active run on shutdown; live lifecycle not tested |
-| `src/security.js` | Staff/owner checks, attachment validation, transcript limits, payment reconciliation | REVIEWED | Existing unit tests inspected |
+| `src/security.js` | Staff/owner checks, attachment validation, transcript limits, payment reconciliation, vouch deadline helper | REVIEWED — UPDATED | Deadline helper has boundary tests |
 | `src/ticket-recovery.js` | Missing-ticket state reconciliation | ADDED — CI PASS | Shared timestamp; injected database dependency for regression testing |
 | `src/config.js` | Environment configuration | REVIEWED — UPDATED | Removed obsolete guild ID setting |
 | `src/database.js` | MongoDB connection and indexes | REVIEWED | Actual Atlas data/index compatibility is unavailable |
@@ -39,10 +43,10 @@ The audit branch fixes the confirmed runtime defects, shared catalog selection b
 | `src/global-commands.js` | Command deployment | REVIEWED — FIXED, CI PASS; LIVE DISCORD BLOCKED | Global registration plus cleanup of legacy guild registrations |
 | `src/deploy-commands.js` | Manual command refresh | REVIEWED — FIXED, CI PASS; LIVE DISCORD BLOCKED | Enumerates current guilds and destroys the temporary client in `finally` |
 | `src/ui.js` | Components V2 UI builders/text splitting | REVIEWED | No live Discord visual test |
-| `test/security.test.js` | Security helper unit tests | REVIEWED — PASS CI | Existing unit tests passed in GitHub Actions |
+| `test/security.test.js` | Security helper unit tests | REVIEWED — UPDATED, LATEST CI PENDING | Added vouch deadline boundary tests |
 | `test/ticket-recovery.test.js` | Missing-channel recovery regression tests | ADDED — PASS CI | Tests shared timestamp and invalid identifiers |
 | `package.json` | Runtime/dependencies/npm scripts | REVIEWED — CI PASS | Added `prestart` and `validate`; syntax check includes new module |
-| `.github/workflows/ci.yml` | GitHub Actions | REVIEWED — PASS | Run [#38048167806](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38048167806) passed install, tests, and syntax checks |
+| `.github/workflows/ci.yml` | GitHub Actions | REVIEWED — UPDATED, LATEST CI PENDING | Explicit `contents: read` workflow token permission; earlier run [#38048167806](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38048167806) passed before latest audit additions |
 | `README.md` | Setup/operation guide | REVIEWED — UPDATED | Aligned with global commands and automatic validation |
 | `AUDIT.md` | Audit log/report | REVIEWED — UPDATED | Records scope, findings, remediation, CI evidence, and residual risks |
 | `.env.example` | Environment template | REVIEWED — UPDATED | Removed `DISCORD_GUILD_ID` |
@@ -93,6 +97,10 @@ Command definitions live in `src/commands.js`. The event router is in `src/index
 | AUD-008 | P2 | High | Public persistent catalog | Category/product selection edited the shared public message; users could interfere with each other's selection state | FIXED — PENDING LIVE E2E; each user now gets a private catalog copy on first selection |
 | AUD-009 | P2 | High | `src/order-system.js`, `src/index.js` shutdown | Maintenance interval was never cleared and an active run was not awaited before MongoDB closed | FIXED — CI PASS; LIVE SHUTDOWN TEST NOT RUN |
 | AUD-010 | P2 | Medium | Dependencies / CI | Dependency advisories were not checked with `npm audit`; the local environment could not access the registry and no lockfile is present | OPEN — run dependency audit after lockfile/registry access |
+| AUD-011 | P2 | Medium | `src/order-system.js` vouch modal submit | Vouch deadline was checked on modal open but not rechecked on submit; a late submission could be accepted | FIXED — REGRESSION TEST ADDED; LATEST CI PENDING |
+| AUD-012 | P2 | Medium | `src/index.js`, `src/order-system.js` audit logs | Audit log insert errors were swallowed, making audit-trail loss invisible in process logs | FIXED — CONSOLE ERROR LOGGING ADDED; LATEST CI PENDING |
+| AUD-013 | P3 | Medium | `src/order-system.js` public vouch panel | Buyer-controlled Markdown could alter public testimonial formatting; mention parsing was already disabled | FIXED — ESCAPED TESTIMONIAL TEXT; LATEST CI PENDING |
+| AUD-014 | P3 | High | `src/config.js`, `.env.example`, `src/index.js`, `src/order-system.js` | Unused `LOG_LEVEL`, `v2SendPayload`, and `ticketNumber` argument increased maintenance noise | FIXED — REMOVED UNUSED ITEMS; LATEST CI PENDING |
 
 ## E. Security and permission matrix
 
@@ -118,11 +126,14 @@ Role IDs, channel overwrites, and bot permissions still require live-server veri
 2. Imported `ObjectId` in `src/index.js` so panel category/product handlers can use it.
 3. Added `test/ticket-recovery.test.js` for missing-channel recovery and invalid identifiers.
 4. Changed catalog category/product selection to a per-user ephemeral copy, leaving the public catalog unchanged.
-5. Added a stop function for order maintenance; shutdown clears the interval and waits for the active maintenance run before closing MongoDB.
-6. Migrated slash-command deployment to global registration; attempts to remove legacy guild-scoped copies only in guilds the bot currently enumerates. Cleanup errors are surfaced instead of reporting success.
-7. Removed `DISCORD_GUILD_ID` from runtime config and the example environment.
-8. Added `npm run validate` and `prestart` so each `npm start` runs unit and syntax checks first.
-9. Updated README instructions to match the actual deployment flow.
+5. Rechecked the vouch deadline at modal submission, added boundary tests, and escaped user-controlled testimonial Markdown.
+6. Changed previously silent audit-log insert failures to write a sanitized error message to the process log.
+7. Removed unused `LOG_LEVEL`, the unused `v2SendPayload` helper, and the unused `ticketNumber` initializer argument; limited the CI token to `contents: read`.
+8. Added a stop function for order maintenance; shutdown clears the interval and waits for the active maintenance run before closing MongoDB.
+9. Migrated slash-command deployment to global registration; attempts to remove legacy guild-scoped copies only in guilds the bot currently enumerates. Cleanup errors are surfaced instead of reporting success.
+10. Removed `DISCORD_GUILD_ID` from runtime config and the example environment.
+11. Added `npm run validate` and `prestart` so each `npm start` runs unit and syntax checks first.
+12. Updated README instructions to match the actual deployment flow.
 
 No production Discord server, MongoDB database, or VPS was modified.
 
@@ -134,6 +145,7 @@ No production Discord server, MongoDB database, or VPS was modified.
 | New `test/ticket-recovery.test.js` | Regression unit | PASS | Added on audit branch and passed in GitHub Actions run [#38048167806](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38048167806) |
 | `npm run check` | Syntax | PASS | `src/ticket-recovery.js` included; all configured `node --check` commands passed in GitHub Actions run [#38048167806](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38048167806) |
 | Maintenance shutdown | Static review | PASS (code review) | Timer clear and active-run wait are wired; no live shutdown test |
+| Vouch deadline | Unit regression | NOT RUN — LATEST CI PENDING | Added boundary tests for before/at/after deadline and invalid dates |
 | Global command refresh | Discord integration | BLOCKED | Requires real bot token and Discord API |
 | Ticket permission/visibility | Live E2E | BLOCKED | Requires configured Discord test server |
 | Payment proof, vouch, transcript lifecycle | Live E2E | BLOCKED | Requires Discord + MongoDB test environment |
@@ -170,6 +182,6 @@ Never share `.env`, tokens, MongoDB URI, payment credentials, or private logs. A
 
 ## J. Conclusion
 
-Current status: **PARTIALLY AUDITED — WITH FINDINGS; UNIT/SYNTAX CI PASSED, LIVE INTEGRATION AND DEPENDENCY AUDIT REMAIN.**
+Current status: **PARTIALLY AUDITED — WITH FINDINGS; LATEST UNIT/SYNTAX CI PENDING, LIVE INTEGRATION AND DEPENDENCY AUDIT REMAIN.**
 
 This report does not claim 100% safety, full E2E coverage, or production verification. Upgrade the status only after CI results are checked and remaining inventory/integration limitations are addressed.
