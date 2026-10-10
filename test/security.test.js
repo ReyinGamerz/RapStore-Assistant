@@ -81,6 +81,7 @@ import { expectedProofStatus } from "../src/security.js";
 test("reconciles interrupted payment review from authoritative order state", () => {
   const proof = { _id: "proof-1", status: "pending" };
   assert.equal(expectedProofStatus(proof, { latestProofId: "proof-1", status: "PROSES", paymentStatus: "verified" }), "accepted");
+  assert.equal(expectedProofStatus(proof, { latestProofId: "proof-1", status: "DONE", paymentStatus: "verified" }), "accepted");
   assert.equal(expectedProofStatus(proof, { latestProofId: "proof-1", status: "ON HOLD", paymentStatus: "rejected" }), "rejected");
   assert.equal(expectedProofStatus(proof, { latestProofId: "proof-1", status: "ON HOLD", paymentStatus: "pending_review" }), "pending");
   assert.equal(expectedProofStatus(proof, { latestProofId: "proof-2", status: "ON HOLD", paymentStatus: "pending_review" }), "superseded");
