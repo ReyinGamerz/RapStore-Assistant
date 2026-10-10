@@ -201,6 +201,7 @@ export async function initializeOrderTicket({ channel, interaction, ticketNumber
   const db = getDatabase();
   const product = selectedProduct && selectedProduct.active !== false ? selectedProduct : null;
   const unitPrice = product ? Number(product.price || 0) : 0;
+  if (product && (!Number.isSafeInteger(unitPrice) || unitPrice < 1)) throw new Error("Selected product has an invalid price.");
   const orderCode = "RAP-" + ticketNumber + "-" + channel.id.slice(-4);
   const now = new Date();
   const result = await db.collection("orders").insertOne({
@@ -429,6 +430,34 @@ export async function handleOrderInteraction(interaction, client) {
       await replyNotice(interaction, "PILIH PRODUK DULU", "Pilih kategori dan produk, lalu pastikan jumlah serta total harga sudah benar sebelum memilih pembayaran.");
       return;
     }
+    if (!ObjectId.isValid(order.productId)) {
+      await replyNotice(interaction, "PRODUK TIDAK VALID", "Pilih ulang produk dari katalog sebelum membayar.");
+      return;
+    }
+    const liveProduct = await db.collection("products").findOne({ _id: new ObjectId(order.productId), active: true });
+    if (!liveProduct) {
+      await replyNotice(interaction, "PRODUK SUDAH TIDAK TERSEDIA", "Produk ini sudah tidak aktif. Pilih produk aktif yang lain sebelum membayar.");
+      return;
+    }
+    const livePrice = Number(liveProduct.price);
+    const liveTotal = livePrice * Number(order.amount || 1);
+    if (!Number.isSafeInteger(livePrice) || livePrice < 1 || !Number.isSafeInteger(liveTotal)) {
+      await replyNotice(interaction, "HARGA TIDAK VALID", "Harga produk tidak dapat digunakan. Hubungi Founder/Admin.");
+      return;
+    }
+    if (livePrice !== order.unitPrice) {
+      await db.collection("orders").updateOne({ _id: order._id, status: "ON HOLD" }, {
+        $set: { unitPrice: livePrice, totalPrice: liveTotal, paymentMethod: null, paymentStatus: "unpaid", updatedAt: new Date() },
+      });
+      const repricedOrder = await db.collection("orders").findOne({ _id: order._id });
+      await refreshOrderMessage(repricedOrder, client);
+      if (order.paymentMessageId) {
+        const oldPaymentMessage = await interaction.channel.messages.fetch(order.paymentMessageId).catch(() => null);
+        if (oldPaymentMessage) await oldPaymentMessage.edit(buildPaymentPicker()).catch(() => {});
+      }
+      await replyNotice(interaction, "HARGA DIPERBARUI", "Harga produk berubah sejak dipilih. Total sudah diperbarui menjadi **" + price(liveTotal) + "**. Periksa pesanan lalu pilih metode pembayaran lagi.");
+      return;
+    }
     const method = customId.endsWith(":qris") ? "qris" : "bank";
     const payment = configuredPayment(method);
     if (!payment) {
@@ -476,13 +505,14 @@ export async function handleOrderInteraction(interaction, client) {
         return;
       }
       const unitPrice = Number(product.price);
-      if (!Number.isSafeInteger(unitPrice) || unitPrice < 1) {
-        await replyNotice(interaction, "HARGA PRODUK TIDAK VALID", "Hubungi Founder/Admin untuk memeriksa harga produk ini.");
+      const totalPrice = unitPrice * Number(order.amount || 1);
+      if (!Number.isSafeInteger(unitPrice) || unitPrice < 1 || !Number.isSafeInteger(totalPrice)) {
+        await replyNotice(interaction, "HARGA PRODUK TIDAK VALID", "Harga atau total produk tidak aman untuk dihitung. Hubungi Founder/Admin.");
         return;
       }
       Object.assign(changes, {
         productId: String(product._id), productName: clean(product.name, 100), unitPrice,
-        totalPrice: unitPrice * Number(order.amount || 1), category: clean(product.category || "Umum", 80),
+        totalPrice, category: clean(product.category || "Umum", 80),
       });
     } else if (customId === "rapstore:order:amount") {
       const amount = Number(selection);
@@ -490,7 +520,12 @@ export async function handleOrderInteraction(interaction, client) {
         await replyNotice(interaction, "JUMLAH TIDAK VALID", "Jumlah harus antara 1 dan 25, dan produk harus dipilih terlebih dahulu.");
         return;
       }
-      Object.assign(changes, { amount, totalPrice: Number(order.unitPrice || 0) * amount });
+      const totalPrice = Number(order.unitPrice || 0) * amount;
+      if (!Number.isSafeInteger(totalPrice)) {
+        await replyNotice(interaction, "TOTAL TIDAK VALID", "Total harga terlalu besar untuk dihitung dengan aman. Hubungi Founder/Admin.");
+        return;
+      }
+      Object.assign(changes, { amount, totalPrice });
     } else {
       await replyNotice(interaction, "PILIHAN TIDAK DIKENAL", "Buka ulang panel pesanan dan coba lagi.");
       return;
