@@ -1084,13 +1084,13 @@ export async function handleOrderInteraction(interaction, client) {
       if (savedVouch?.status === "published") {
         try {
           await closeOrderTicketAfterVouch(order, client, interaction.user.id);
-          await interaction.editReply(v2(buildPanel("VOUCH TERKIRIM — TIKET DITUTUP", "Terima kasih! Testimoni sudah dipublikasikan. Transcript HTML sudah dibuat dan tiket otomatis ditutup.")));
+          await interaction.editReply(v2(buildPanel("VOUCH TERKIRIM — TIKET DITUTUP", "Terima kasih! Testimoni sudah dipublikasikan. Transcript HTML sudah dibuat dan tiket otomatis ditutup."), true));
         } catch (error) {
           console.error("[vouch-auto-close]", error?.message || error);
-          await interaction.editReply(v2(buildPanel("VOUCH TERKIRIM — PENUTUPAN DIULANG OTOMATIS", "Testimoni sudah dipublikasikan. Transcript atau penghapusan channel belum selesai, jadi bot akan mencoba lagi otomatis. Channel tidak dihapus sebelum transcript tersimpan.")));
+          await interaction.editReply(v2(buildPanel("VOUCH TERKIRIM — PENUTUPAN DIULANG OTOMATIS", "Testimoni sudah dipublikasikan. Transcript atau penghapusan channel belum selesai, jadi bot akan mencoba lagi otomatis. Channel tidak dihapus sebelum transcript tersimpan."), true));
         }
       } else {
-        await interaction.editReply(v2(buildPanel("VOUCH TERSIMPAN", "Testimoni tersimpan, tetapi belum berhasil dipublikasikan. Bot akan mencoba kembali otomatis; tiket baru ditutup setelah vouch dan transcript berhasil diproses.")));
+        await interaction.editReply(v2(buildPanel("VOUCH TERSIMPAN", "Testimoni tersimpan, tetapi belum berhasil dipublikasikan. Bot akan mencoba kembali otomatis; tiket baru ditutup setelah vouch dan transcript berhasil diproses."), true));
       }
       return;
     }
@@ -1402,6 +1402,7 @@ export async function handleOrderInteraction(interaction, client) {
     }
     const updated = await db.collection("orders").findOne({ _id: order._id });
     await interaction.update(await buildOrderPanel(updated));
+    await refreshOrderLog(updated, client).catch(error => console.error("[order-log]", error?.message || error));
     if (previousPaymentMethod && order.paymentMessageId) {
       const paymentMessage = await interaction.channel.messages.fetch(order.paymentMessageId).catch(() => null);
       if (paymentMessage) await paymentMessage.edit(buildPaymentPicker()).catch(() => {});
