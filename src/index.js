@@ -241,7 +241,9 @@ async function upsertPersistentPanel(interaction, type, payload) {
     if (type === "catalog") Object.assign(panelUpdate, { selectedCategory: "", selectedProductId: "" });
     await collection.updateOne({ guildId: interaction.guildId, type }, { $set: panelUpdate }, { upsert: true });
   } else {
-    await collection.updateOne({ guildId: interaction.guildId, type }, { $set: { updatedAt: new Date() } });
+    const panelUpdate = { updatedAt: new Date() };
+    if (type === "catalog") Object.assign(panelUpdate, { selectedCategory: "", selectedProductId: "" });
+    await collection.updateOne({ guildId: interaction.guildId, type }, { $set: panelUpdate });
   }
   await interaction.editReply(v2Payload({
     content: type === "catalog" ? "Katalog publik berhasil disinkronkan." : "Panel katalog publik berhasil disinkronkan.",
