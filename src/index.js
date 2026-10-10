@@ -256,7 +256,11 @@ async function showFounderPanel(interaction) {
     await interaction.reply(v2Payload({ content: "Panel hanya untuk Founder/Admin.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
     return;
   }
-  await upsertPersistentPanel(interaction, "panel", buildFounderPanelPayload());
+  // The management panel must never be posted publicly. Keep it ephemeral to the staff member.
+  await interaction.reply({
+    ...buildFounderPanelPayload(),
+    flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral,
+  });
 }
 
 async function refreshPersistentPanels(readyClient, onlyType = null) {
@@ -265,9 +269,20 @@ async function refreshPersistentPanels(readyClient, onlyType = null) {
   const records = await db.collection("persistent_panels").find(filter).toArray();
   for (const record of records) {
     try {
+      // Remove any legacy public management panel created by older bot versions.
+      if (record.type === "panel") {
+        const oldChannel = await readyClient.channels.fetch(record.channelId).catch(() => null);
+        const oldMessage = oldChannel?.messages
+          ? await oldChannel.messages.fetch(record.messageId).catch(() => null)
+          : null;
+        if (oldMessage) await oldMessage.delete().catch(error => logError("legacy-public-panel-delete", error));
+        await db.collection("persistent_panels").deleteOne({ _id: record._id });
+        console.log("[persistent-panel] Removed legacy public management panel; /panel is now ephemeral.");
+        continue;
+      }
       const payload = record.type === "catalog"
         ? await buildCatalogPayload(record.selectedCategory || "", record.selectedProductId || "")
-        : record.type === "panel" ? buildFounderPanelPayload() : null;
+        : null;
       if (!payload) continue;
       const channel = await readyClient.channels.fetch(record.channelId).catch(() => null);
       if (!channel || typeof channel.send !== "function") { console.error("[persistent-panel] Saved channel unavailable for " + record.type); continue; }
