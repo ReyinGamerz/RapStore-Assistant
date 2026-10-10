@@ -267,10 +267,24 @@ async function refreshOrderLog(order, client) {
     if (existing) { await existing.edit({ ...buildOrderLog(order), allowedMentions: { parse: [], users: [], roles: [] } }); return; }
   }
   const message = await channel.send({ ...buildOrderLog(order), allowedMentions: { parse: [], users: [], roles: [] } });
-  await getDatabase().collection("orders").updateOne(
-    { _id: order._id, $or: [{ orderLogMessageId: { $exists: false } }, { orderLogMessageId: null }, { orderLogChannelId: { $ne: logChannelId } }] },
-    { $set: { orderLogMessageId: message.id, orderLogChannelId: logChannelId, updatedAt: new Date() } }
-  );
+  const orders = getDatabase().collection("orders");
+  const filter = order.orderLogMessageId
+    ? { _id: order._id, orderLogMessageId: order.orderLogMessageId, orderLogChannelId: order.orderLogChannelId }
+    : { _id: order._id, $or: [{ orderLogMessageId: { $exists: false } }, { orderLogMessageId: null }] };
+  const saved = await orders.updateOne(filter, { $set: { orderLogMessageId: message.id, orderLogChannelId: logChannelId, updatedAt: new Date() } });
+  if (!saved.modifiedCount) {
+    const latest = await orders.findOne({ _id: order._id });
+    if (latest?.orderLogMessageId) {
+      await message.delete().catch(() => {});
+      if (latest.orderLogChannelId === logChannelId) {
+        const winner = await channel.messages.fetch(latest.orderLogMessageId).catch(() => null);
+        if (winner) await winner.edit({ ...buildOrderLog(latest), allowedMentions: { parse: [], users: [], roles: [] } }).catch(() => {});
+      }
+      order.orderLogMessageId = latest.orderLogMessageId;
+      order.orderLogChannelId = latest.orderLogChannelId;
+      return;
+    }
+  }
   order.orderLogMessageId = message.id;
   order.orderLogChannelId = logChannelId;
 }
