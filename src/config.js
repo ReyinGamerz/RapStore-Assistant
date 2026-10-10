@@ -30,12 +30,4 @@ export const config = {
   },
   vouchChannelId: optionalId("VOUCH_CHANNEL_ID"),
   transcriptChannelId: optionalId("TRANSCRIPT_CHANNEL_ID"),
-  cloudStorage: {
-    b2S3Endpoint: optionalId("B2_S3_ENDPOINT"),
-    b2Region: optionalId("B2_REGION"),
-    b2AccessKeyId: optionalId("B2_ACCESS_KEY_ID"),
-    b2SecretAccessKey: optionalId("B2_SECRET_ACCESS_KEY"),
-    b2BucketName: optionalId("B2_BUCKET_NAME"),
-    b2PublicBaseUrl: optionalId("B2_PUBLIC_BASE_URL").replace(new RegExp(String.fromCharCode(47) + "$"), ""),
-  },
 };
