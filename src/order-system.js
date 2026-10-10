@@ -1427,7 +1427,7 @@ export async function handleOrderMessage(message, client) {
   });
   const claim = await db.collection("orders").updateOne({
     _id: order._id, status: "ON HOLD", paymentMethod: order.paymentMethod,
-    paymentStatus: { $in: ["unpaid", null] },
+    paymentStatus: { $in: ["unpaid", "rejected", null] },
   }, {
     $set: { paymentStatus: "pending_review", latestProofId: String(proofResult.insertedId), updatedAt: new Date() },
   });
