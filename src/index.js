@@ -52,7 +52,7 @@ async function getProductCategories() {
 }
 function parseDiscordEmoji(value) {
   const text = safeText(value, 100);
-  const match = text.match(/^<(a?):([a-zA-Z0-9_]{2,32}):(\\d{17,20})>$/);
+  const match = text.match(/^<(a?):([a-zA-Z0-9_]{2,32}):(\d{17,20})>$/);
   if (!match) return null;
   return { name: match[2], id: match[3], animated: match[1] === "a" };
 }
@@ -61,6 +61,56 @@ function categoryDisplay(category) {
   const match = name.match(/^(<a?:[a-zA-Z0-9_]{2,32}:\\d{17,20}>)\\s*(.*)$/);
   return { name: match && match[2] ? match[2] : name, emoji: parseDiscordEmoji(category?.emoji) || (match ? parseDiscordEmoji(match[1]) : null) };
 }
+async function synchronizeCategoryData() {
+  const db = getDatabase();
+  const categories = db.collection("categories");
+  const products = db.collection("products");
+  let normalizedCategories = 0;
+  let normalizedProducts = 0;
+
+  // Normalize legacy category names that accidentally contain a custom emoji tag.
+  const savedCategories = await categories.find({}).toArray();
+  for (const record of savedCategories) {
+    const display = categoryDisplay(record);
+    if (display.name === record.name && !display.emoji) continue;
+    const cleanName = display.name;
+    const emojiText = record.emoji || (display.emoji
+      ? "<" + (display.emoji.animated ? "a" : "") + ":" + display.emoji.name + ":" + display.emoji.id + ">"
+      : "");
+    const existing = await categories.findOne({ name: cleanName, _id: { $ne: record._id } });
+    if (existing) {
+      if (!existing.emoji && emojiText) await categories.updateOne({ _id: existing._id }, { $set: { emoji: emojiText, updatedAt: new Date() } });
+      await products.updateMany({ category: record.name }, { $set: { category: cleanName, categoryEmoji: emojiText, updatedAt: new Date() } });
+      await categories.deleteOne({ _id: record._id });
+    } else {
+      await categories.updateOne({ _id: record._id }, { $set: { name: cleanName, emoji: emojiText, updatedAt: new Date() } });
+      await products.updateMany({ category: record.name }, { $set: { category: cleanName, categoryEmoji: emojiText, updatedAt: new Date() } });
+    }
+    normalizedCategories++;
+  }
+
+  // Also normalize product documents if an old category value stored the emoji as part of its name.
+  const productCategories = await products.distinct("category");
+  for (const rawName of productCategories) {
+    if (typeof rawName !== "string") continue;
+    const display = categoryDisplay({ name: rawName });
+    if (display.name === rawName || !display.emoji) continue;
+    const emojiText = "<" + (display.emoji.animated ? "a" : "") + ":" + display.emoji.name + ":" + display.emoji.id + ">";
+    await products.updateMany({ category: rawName }, { $set: { category: display.name, categoryEmoji: emojiText, updatedAt: new Date() } });
+    const existing = await categories.findOne({ name: display.name });
+    if (existing) {
+      if (!existing.emoji) await categories.updateOne({ _id: existing._id }, { $set: { emoji: emojiText, updatedAt: new Date() } });
+    } else {
+      await categories.insertOne({ name: display.name, emoji: emojiText, createdAt: new Date(), migrated: true });
+    }
+    normalizedProducts++;
+  }
+
+  if (normalizedCategories || normalizedProducts) {
+    console.log("[database] Category sync complete: " + normalizedCategories + " category records, " + normalizedProducts + " product category values normalized.");
+  }
+}
+
 function encodeCategory(category) { return Buffer.from(category, "utf8").toString("base64url"); }
 function decodeCategory(encoded) { try { return Buffer.from(encoded, "base64url").toString("utf8"); } catch { return ""; } }
 async function showCategoryPicker(interaction, mode, productId = "", responseMode = "reply") {
@@ -496,6 +546,7 @@ async function shutdown(signal) {
 
 async function main() {
   await connectDatabase(config.mongoUri, config.mongoDbName);
+  await synchronizeCategoryData();
   client = new Client({ intents: [GatewayIntentBits.Guilds] });
   client.on(Events.InteractionCreate, interaction => {
     void handleInteraction(interaction).catch(async error => {
