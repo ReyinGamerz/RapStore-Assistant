@@ -372,6 +372,11 @@ async function main() {
   client = new Client({ intents: [GatewayIntentBits.Guilds] });
   client.on(Events.InteractionCreate, interaction => {
     void handleInteraction(interaction).catch(async error => {
+      const code = Number(error?.code);
+      if (code === 10062 || error?.code === "Unknown interaction") {
+        console.warn("[interaction] Interaction expired or was already acknowledged; ask the user to run /catalog again.");
+        return;
+      }
       logError("interaction", error);
       if (!interaction.isRepliable()) return;
       const message = "Terjadi kesalahan saat memproses permintaan. Coba lagi; jika berulang, hubungi Founder/Admin.";
@@ -382,7 +387,7 @@ async function main() {
           await interaction.reply(v2Payload({ content: message, flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
         }
       } catch (replyError) {
-        logError("interaction-error-response", replyError);
+        if (Number(replyError?.code) !== 10062 && replyError?.code !== "Unknown interaction") logError("interaction-error-response", replyError);
       }
     });
   });
