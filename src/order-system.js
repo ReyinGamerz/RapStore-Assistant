@@ -1514,7 +1514,7 @@ export async function handleOrderInteraction(interaction, client) {
     };
     const showCommittedState = async currentOrder => {
       if (!proofIsLatest(currentOrder)) return false;
-      if (currentOrder.status === "PROSES" && currentOrder.paymentStatus === "verified") {
+      if (["PROSES", "DONE"].includes(currentOrder.status) && currentOrder.paymentStatus === "verified") {
         await updatePaymentReviewMessage(interaction, "BUKTI VALID — PESANAN DIPROSES",
           "Bukti transfer sudah dinyatakan valid oleh <@" + (currentOrder.reviewedBy || proof.reviewedBy || interaction.user.id) + ">.\n" +
           "Pembeli: <@" + currentOrder.buyerId + ">\n" +
@@ -1523,7 +1523,7 @@ export async function handleOrderInteraction(interaction, client) {
         await supersedePendingProofs(db, client, currentOrder._id, proof._id, "another_proof_accepted");
         await refreshOrderMessage(currentOrder, client).catch(error => console.error("[payment-review-order-refresh]", error?.message || error));
         await db.collection("audit_logs").insertOne({
-          action: "payment.verified", actorId: interaction.user.id, guildId: interaction.guildId,
+          action: "payment.verified", actorId: currentOrder.reviewedBy || proof.reviewedBy || interaction.user.id, guildId: interaction.guildId,
           details: { orderId: String(currentOrder._id), proofId: String(proof._id), orderCode: currentOrder.orderCode },
           createdAt: new Date(),
         }).catch(() => {});
@@ -1538,7 +1538,7 @@ export async function handleOrderInteraction(interaction, client) {
         await markProofTerminal("rejected", currentOrder.reviewedBy || interaction.user.id);
         await refreshOrderMessage(currentOrder, client).catch(error => console.error("[payment-review-order-refresh]", error?.message || error));
         await db.collection("audit_logs").insertOne({
-          action: "payment.rejected", actorId: interaction.user.id, guildId: interaction.guildId,
+          action: "payment.rejected", actorId: currentOrder.reviewedBy || proof.reviewedBy || interaction.user.id, guildId: interaction.guildId,
           details: { orderId: String(currentOrder._id), proofId: String(proof._id), orderCode: currentOrder.orderCode },
           createdAt: new Date(),
         }).catch(() => {});
