@@ -162,7 +162,20 @@ async function handleFounderPanelButton(interaction) {
       await interaction.editReply(v2Payload({content:"Belum ada produk yang tersedia.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
       return;
     }
-    const menu = new StringSelectMenuBuilder().setCustomId("rapstore:panelchoose:editproduct").setPlaceholder("Pilih produk").setMinValues(1).setMaxValues(1).addOptions(products.map(p=>({label:safeText(p.name,100),value:String(p._id),description:(safeText(p.category||"Umum",80)+" • "+formatPrice(p.price)).slice(0,100)})));
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId("rapstore:panelchoose:editproduct")
+      .setPlaceholder("Pilih produk")
+      .setMinValues(1).setMaxValues(1)
+      .addOptions(products.map(p => {
+        const option = {
+          label: safeText(p.name,100),
+          value: String(p._id),
+          description: (safeText(p.category || "Umum",80) + " • " + formatPrice(p.price)).slice(0,100),
+        };
+        const emoji = parseDiscordEmoji(p.emoji);
+        if (emoji) option.emoji = emoji;
+        return option;
+      }));
     const panel=buildPanel("EDIT PRODUK","Pilih produk yang ingin diubah.");
     panel.addActionRowComponents(new ActionRowBuilder().addComponents(menu));
     await interaction.editReply({flags:MessageFlags.IsComponentsV2|MessageFlags.Ephemeral,components:[panel]});
