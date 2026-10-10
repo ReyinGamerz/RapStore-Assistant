@@ -889,7 +889,7 @@ async function handleCatalogSelection(interaction) {
           await channel.send({ flags: MessageFlags.IsComponentsV2, components: [ticketWelcome] });
         }
       } catch (error) {
-        await db.collection("tickets").deleteOne({ channelId: channel.id }).catch(error => console.error("[audit-log-write]", error?.message || error));
+        await db.collection("tickets").deleteOne({ channelId: channel.id }).catch(error => logError("ticket-create-rollback", error));
         await db.collection("orders").deleteMany({ channelId: channel.id, status: "ON HOLD" }).catch(() => {});
         await channel.delete("Failed to initialize catalog ticket").catch(() => {});
         throw error;
