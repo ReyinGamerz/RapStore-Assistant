@@ -281,11 +281,18 @@ function paymentReviewResultPayload(title, body) {
 async function updatePaymentReviewMessage(interaction, title, body) {
   const payload = paymentReviewResultPayload(title, body);
   try {
+    // deferUpdate acknowledges the click early; subsequent work edits the same bot-owned message.
+    if (interaction.deferred || interaction.replied) {
+      if (interaction.message?.editable) {
+        await interaction.message.edit(payload);
+        return true;
+      }
+      return false;
+    }
     await interaction.update(payload);
     return true;
   } catch (error) {
-    // A failure in the interaction callback must not leave the visible review controls stale
-    // when the bot still has permission to edit its message directly.
+    // A callback/acknowledgement failure must not leave stale controls when direct editing is possible.
     console.error("[payment-review-message-update]", error?.message || error);
     try {
       if (interaction.message?.editable) {
@@ -1550,6 +1557,9 @@ export async function handleOrderInteraction(interaction, client) {
 
     const action = customId.startsWith("rapstore:payment:process:") ? "process" : "invalid";
     const proofId = customId.slice(("rapstore:payment:" + action + ":").length);
+    await interaction.deferUpdate().catch(error => {
+      console.error("[payment-review-acknowledge]", error?.message || error);
+    });
     const staleBody = "Bukti ini sudah tidak aktif. Periksa panel PESANAN untuk status terbaru.";
     if (!ObjectId.isValid(proofId)) {
       await updatePaymentReviewMessage(interaction, "BUKTI TIDAK VALID", "ID bukti transfer tidak valid; tombol verifikasi dinonaktifkan.");
