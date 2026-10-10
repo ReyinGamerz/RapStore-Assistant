@@ -1516,7 +1516,7 @@ export async function handleOrderInteraction(interaction, client) {
       if (!proofIsLatest(currentOrder)) return false;
       if (currentOrder.status === "PROSES" && currentOrder.paymentStatus === "verified") {
         await updatePaymentReviewMessage(interaction, "BUKTI VALID — PESANAN DIPROSES",
-          "Bukti transfer sudah dinyatakan valid oleh <@" + interaction.user.id + ">.\n" +
+          "Bukti transfer sudah dinyatakan valid oleh <@" + (currentOrder.reviewedBy || proof.reviewedBy || interaction.user.id) + ">.\n" +
           "Pembeli: <@" + currentOrder.buyerId + ">\n" +
           "Pesanan **" + clean(currentOrder.orderCode, 40) + "** sekarang berstatus **PROSES**.");
         await markProofTerminal("accepted", currentOrder.reviewedBy || interaction.user.id);
@@ -1531,7 +1531,7 @@ export async function handleOrderInteraction(interaction, client) {
       }
       if (currentOrder.status === "ON HOLD" && currentOrder.paymentStatus === "rejected") {
         await updatePaymentReviewMessage(interaction, "BUKTI TRANSFER TIDAK VALID",
-          "Diperiksa oleh <@" + interaction.user.id + ">.\n" +
+          "Diperiksa oleh <@" + (currentOrder.reviewedBy || proof.reviewedBy || interaction.user.id) + ">.\n" +
           "<@" + currentOrder.buyerId + ">, bukti ini tidak valid. Silakan kirim ulang bukti pembayaran yang jelas dan sesuai nominal.
 " +
           "Status pesanan tetap **ON HOLD**.");
