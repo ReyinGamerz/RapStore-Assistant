@@ -677,9 +677,16 @@ async function handleCatalogSelection(interaction) {
       });
       const productLine = selectedProduct ? "\nProduk yang dipilih: **" + safeText(selectedProduct.name, 100) + "**" : "\nProduk belum dipilih dari katalog.";
       const intro = isOrder
-        ? "**RAPSTORE — ORDER SEKARANG**\nHalo <@" + interaction.user.id + ">! Staf akan membantu melanjutkan pemesanan lu."
-        : "**RAPSTORE — TANYA-TANYA DULU**\nHalo <@" + interaction.user.id + ">! Silakan tulis pertanyaan produk lu di sini.";
-      await channel.send(v2SendPayload(intro + productLine + "\n\nJangan kirim password atau data sensitif."));
+        ? "Halo <@" + interaction.user.id + ">! Staf akan membantu melanjutkan pemesanan lu."
+        : "Halo <@" + interaction.user.id + ">! Silakan tulis pertanyaan produk lu di sini.";
+      const ticketWelcome = buildPanel(
+        isOrder ? "RAPSTORE — ORDER SEKARANG" : "RAPSTORE — TANYA-TANYA DULU",
+        intro + productLine + "\n\nJangan kirim password atau data sensitif."
+      );
+      ticketWelcome.addActionRowComponents(new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId("rapstore:ticket:close").setLabel("Tutup Tiket").setStyle(ButtonStyle.Danger)
+      ));
+      await channel.send({ flags: MessageFlags.IsComponentsV2, components: [ticketWelcome] });
       await interaction.followUp(v2Payload({ content: "✓ Tiket berhasil dibuat: <#" + channel.id + ">.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
     } catch (error) {
       await channel.delete("Failed to initialize catalog ticket").catch(() => {});
@@ -691,7 +698,56 @@ function formatPrice(value) {
   return "Rp " + Number(value || 0).toLocaleString("id-ID");
 }
 
+async function handleTicketButton(interaction) {
+  if (!interaction.inGuild() || !interaction.channel || interaction.channel.type !== ChannelType.GuildText) {
+    await interaction.reply(v2Payload({content:"Tombol tiket hanya bisa digunakan di channel tiket server.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
+    return;
+  }
+  const db = getDatabase();
+  const ticket = await db.collection("tickets").findOne({guildId:interaction.guildId,channelId:interaction.channelId,status:"open"});
+  if (!ticket) {
+    await interaction.reply(v2Payload({content:"Data tiket tidak ditemukan atau tiket sudah ditutup.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
+    return;
+  }
+  const staff = hasStaffRole(interaction.member);
+  if (ticket.buyerId !== interaction.user.id && !staff) {
+    await interaction.reply(v2Payload({content:"Hanya pembuat tiket atau Founder/Admin yang dapat menutup tiket ini.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
+    return;
+  }
+  if (interaction.customId === "rapstore:ticket:close") {
+    const confirm = buildPanel("KONFIRMASI TUTUP TIKET","Yakin ingin menutup tiket ini? Channel akan dikunci dan ditandai sebagai selesai.");
+    confirm.addActionRowComponents(new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId("rapstore:ticket:confirmclose").setLabel("Ya, Tutup Tiket").setStyle(ButtonStyle.Danger),
+      new ButtonBuilder().setCustomId("rapstore:ticket:cancelclose").setLabel("Batal").setStyle(ButtonStyle.Secondary)
+    ));
+    await interaction.reply({flags:MessageFlags.IsComponentsV2|MessageFlags.Ephemeral,components:[confirm]});
+    return;
+  }
+  if (interaction.customId === "rapstore:ticket:cancelclose") {
+    await interaction.deferUpdate();
+    await interaction.deleteReply();
+    return;
+  }
+  if (interaction.customId === "rapstore:ticket:confirmclose") {
+    await interaction.deferUpdate();
+    const freshTicket = await db.collection("tickets").findOne({guildId:interaction.guildId,channelId:interaction.channelId,status:"open"});
+    if (!freshTicket) {
+      await interaction.editReply(v2Payload({content:"Tiket sudah ditutup sebelumnya.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
+      return;
+    }
+    await db.collection("tickets").updateOne({_id:freshTicket._id,status:"open"},{$set:{status:"closed",closedAt:new Date(),closedBy:interaction.user.id}});
+    await interaction.channel.permissionOverwrites.edit(freshTicket.buyerId,{ViewChannel:false,SendMessages:false}).catch(error=>logError("ticket-close-permissions",error));
+    await interaction.channel.setName(("closed-"+interaction.channel.name).slice(0,100)).catch(error=>logError("ticket-close-rename",error));
+    await interaction.editReply(v2Payload({content:"Tiket berhasil ditutup dan channel dikunci. Terima kasih.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
+    await interaction.channel.send(v2SendPayload("🔒 Tiket ditutup oleh <@"+interaction.user.id+">. Channel ini sekarang terkunci."));
+    await audit("ticket.closed",interaction,{ticketId:String(freshTicket._id),channelId:interaction.channelId,buyerId:freshTicket.buyerId});
+  }
+}
+
 async function handleInteraction(interaction) {
+  if (interaction.isButton() && interaction.customId.startsWith("rapstore:ticket:")) {
+    await handleTicketButton(interaction); return;
+  }
   if (interaction.isButton() && interaction.customId.startsWith("rapstore:panel:")) {
     await handleFounderPanelButton(interaction); return;
   }
