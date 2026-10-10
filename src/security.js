@@ -52,3 +52,16 @@ export function validateProofAttachments(attachments) {
   }
   return { ok: true, totalBytes };
 }
+
+/**
+ * Resolve the durable order state after an interrupted payment-review side effect.
+ * "pending" means the proof is still the current proof and awaits staff review.
+ */
+export function expectedProofStatus(proof, order) {
+  if (!proof || proof.status !== "pending") return null;
+  if (!order || String(order.latestProofId || "") !== String(proof._id || "")) return "superseded";
+  if (order.status === "PROSES" && order.paymentStatus === "verified") return "accepted";
+  if (order.status === "ON HOLD" && order.paymentStatus === "rejected") return "rejected";
+  if (order.status === "ON HOLD" && order.paymentStatus === "pending_review") return "pending";
+  return "superseded";
+}
