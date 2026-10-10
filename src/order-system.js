@@ -648,16 +648,16 @@ function buildOrderLog(order) {
   divider(container);
   container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
     "<:people:1549409947215728690> **Buyer**\n" +
-    "<:alur:1553800809198649344> <@" + clean(order.buyerId, 30) + ">\n\n" +
+    "<:alur:1558458209977499740> <@" + clean(order.buyerId, 30) + ">\n\n" +
     "<:box:1551492070051553290> **Jenis Product**\n" +
-    "<:alur:1553800809198649344> " + tick + clean(order.productName || "Belum dipilih", 100) + tick + "\n\n" +
+    "<:alur:1558458209977499740> " + tick + clean(order.productName || "Belum dipilih", 100) + tick + "\n\n" +
     "<a:bintang:1558403940977082448> **Jumlah**\n" +
-    "<:alur:1553800809198649344> " + tick + amount + tick + "\n\n" +
+    "<:alur:1558458209977499740> " + tick + amount + tick + "\n\n" +
     "<:uang:1552535412579508325> **Harga**\n" +
-    "<:alur:1553800809198649344> " + tick + total + tick + "\n\n" +
+    "<:alur:1558458209977499740> " + tick + total + tick + "\n\n" +
     "<a:jam:1549673401881333841> **Date**\n" +
-    "<:alur:1553800809198649344> " + tick + date + tick + "\n\n" +
-    "**Order ID**\n<:alur:1553800809198649344> " + tick + clean(order.orderCode || "", 40) + tick
+    "<:alur:1558458209977499740> " + tick + date + tick + "\n\n" +
+    "**Order ID**\n<:alur:1558458209977499740> " + tick + clean(order.orderCode || "", 40) + tick
   ));
   return v2(container);
 }
