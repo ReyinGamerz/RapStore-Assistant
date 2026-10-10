@@ -210,21 +210,22 @@ async function renderCatalogPanel(interaction, selectedCategory = "", selectedPr
     } else {
       for (const product of list) {
         const retail = Number(product.price || 0);
-        const reseller = Number.isSafeInteger(product.resellerPrice) && product.resellerPrice > 0 ? product.resellerPrice : retail;
         const name = safeText(product.name, 100);
         const description = String(product.description || "")
           .replace(/\r\n/g, "\n")
           .replace(/\\n/g, "\n")
           .replace(/\r/g, "\n")
           .trim();
-        lines.push("### " + (/server\s*boost/i.test(name) ? "💎 " : "✨ ") + name);
+        const isServerBoost = /server\s*boost/i.test(name);
+        const displayName = isServerBoost
+          ? name.replace(/\b(\d+x)\b/g, "`$1`").replace(/\b(\d+)\s+Month\b/gi, "`$1` Month")
+          : name;
+        lines.push("### " + (isServerBoost ? "💎 " : "✨ ") + displayName);
         if (description) {
           lines.push(description.slice(0, 900));
           lines.push("");
-          lines.push("Retail: " + formatPrice(retail) + "  |  Reseller: " + formatPrice(reseller));
-        } else {
-          lines.push("Retail: " + formatPrice(retail) + "  |  Reseller: " + formatPrice(reseller));
         }
+        lines.push("**Harga:** " + formatPrice(retail));
       }
     }
   }
