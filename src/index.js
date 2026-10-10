@@ -848,8 +848,10 @@ async function handleCatalogPageButton(interaction) {
     }));
     return;
   }
-  const { categories } = await catalogData(getDatabase());
+  // Acknowledge the component immediately so a slow database query cannot
+  // exceed Discord's interaction response deadline.
   await interaction.deferUpdate();
+  const { categories } = await catalogData(getDatabase());
   if (!categories.length) {
     await interaction.editReply(await buildCatalogPayload());
     return;
