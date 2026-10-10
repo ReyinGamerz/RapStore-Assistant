@@ -13,7 +13,6 @@ function optionalId(name, fallback = "") {
 export const config = {
   discordToken: required("DISCORD_TOKEN"),
   discordClientId: required("DISCORD_CLIENT_ID"),
-  discordGuildId: optionalId("DISCORD_GUILD_ID") || null,
   mongoUri: required("MONGODB_URI"),
   mongoDbName: optionalId("MONGODB_DB_NAME", "rapstore"),
   logLevel: optionalId("LOG_LEVEL", "info"),
