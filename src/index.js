@@ -9,6 +9,7 @@ import { config } from "./config.js";
 import { connectDatabase, closeDatabase, getDatabase } from "./database.js";
 import { refreshGlobalCommands } from "./global-commands.js";
 import { buildMessage, buildComponentsOnly, buildPanel } from "./ui.js";
+import { isStaffMember, canAccessTicket } from "./security.js";
 import { allocateTicketNumber, initializeOrderTicket, handleOrderInteraction, handleOrderMessage, archiveAndDeleteTicket, startOrderMaintenance } from "./order-system.js";
 
 let client;
@@ -25,7 +26,7 @@ function v2EditPayload(content) { return buildComponentsOnly(content); }
 function v2SendPayload(content) { return buildMessage(content); }
 function logError(context, error) { console.error(`[${context}]`, error instanceof Error ? error.message : "Unknown error"); }
 function hasStaffRole(member) {
-  return Boolean(member?.roles?.cache?.has(config.ids.founderRole) || member?.roles?.cache?.has(config.ids.adminRole));
+  return isStaffMember(member, [config.ids.founderRole, config.ids.adminRole]);
 }
 async function audit(action, interaction, details = {}) {
   try { await getDatabase().collection("audit_logs").insertOne({ action, actorId: interaction.user.id, guildId: interaction.guildId, details, createdAt: new Date() }); }
@@ -256,7 +257,11 @@ async function showFounderPanel(interaction) {
     await interaction.reply(v2Payload({ content: "Panel hanya untuk Founder/Admin.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
     return;
   }
-  await upsertPersistentPanel(interaction, "panel", buildFounderPanelPayload());
+  // The management panel must never be posted publicly. Keep it ephemeral to the staff member.
+  await interaction.reply({
+    ...buildFounderPanelPayload(),
+    flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral,
+  });
 }
 
 async function refreshPersistentPanels(readyClient, onlyType = null) {
@@ -265,9 +270,30 @@ async function refreshPersistentPanels(readyClient, onlyType = null) {
   const records = await db.collection("persistent_panels").find(filter).toArray();
   for (const record of records) {
     try {
+      // Remove old public management panels left by versions that exposed /panel.
+      if (record.type === "panel") {
+        const oldChannel = await readyClient.channels.fetch(record.channelId).catch(() => null);
+        if (!oldChannel?.messages) {
+          console.error("[persistent-panel] Cannot access legacy public panel channel; keeping cleanup record to retry.");
+          continue;
+        }
+        const oldMessage = await oldChannel.messages.fetch(record.messageId).catch(() => null);
+        if (oldMessage) {
+          try {
+            await oldMessage.delete();
+          } catch (error) {
+            logError("legacy-public-panel-delete", error);
+            console.error("[persistent-panel] Could not delete legacy public panel; keeping cleanup record to retry.");
+            continue;
+          }
+        }
+        await db.collection("persistent_panels").deleteOne({ _id: record._id });
+        console.log("[persistent-panel] Removed legacy public management panel; /panel is now ephemeral.");
+        continue;
+      }
       const payload = record.type === "catalog"
         ? await buildCatalogPayload(record.selectedCategory || "", record.selectedProductId || "")
-        : record.type === "panel" ? buildFounderPanelPayload() : null;
+        : null;
       if (!payload) continue;
       const channel = await readyClient.channels.fetch(record.channelId).catch(() => null);
       if (!channel || typeof channel.send !== "function") { console.error("[persistent-panel] Saved channel unavailable for " + record.type); continue; }
@@ -779,7 +805,19 @@ async function handleCatalogSelection(interaction) {
         catch (error) { if (Number(error?.code) === 10003) liveChannel = null; else throw error; }
         if (liveChannel) { existing ||= activeTicket; continue; }
         await db.collection("tickets").updateOne({ _id: activeTicket._id, status: "open" }, { $set: { status: "deleted", closedAt: new Date(), closeReason: "discord_channel_missing", cleanupAt: new Date() } });
-        await db.collection("orders").updateMany({ guildId: interaction.guildId, channelId: activeTicket.channelId, status: "ON HOLD" }, { $set: { status: "CANCELLED", cancelledAt: new Date(), cancelledBy: interaction.user.id, cancelReason: "ticket_channel_missing", updatedAt: new Date() } });
+        const missingAt = new Date();
+        await db.collection("orders").updateMany(
+          { guildId: interaction.guildId, channelId: activeTicket.channelId, status: "ON HOLD" },
+          { $set: { status: "CANCELLED", paymentStatus: "cancelled", cancelledAt: missingAt, cancelledBy: interaction.user.id, cancelReason: "ticket_channel_missing", updatedAt: missingAt } },
+        );
+        await db.collection("payment_proofs").updateMany(
+          { guildId: interaction.guildId, channelId: activeTicket.channelId, status: "pending" },
+          { $set: { status: "superseded", supersededAt: missingAt, supersededReason: "ticket_channel_missing", updatedAt: missingAt }, $unset: { reviewSendingAt: "" } },
+        );
+        await db.collection("orders").updateMany(
+          { guildId: interaction.guildId, channelId: activeTicket.channelId, status: { $in: ["PROSES", "DONE"] }, ticketClosedAt: { $exists: false } },
+          { $set: { ticketCloseBlockedAt: missingAt, ticketCloseBlockedReason: "channel_missing_before_archive", ticketChannelMissingAt: missingAt, transcriptStatus: "unavailable", updatedAt: missingAt }, $unset: { closeProcessingAt: "" } },
+        );
       }
       if (existing) {
         await reportProgress("TIKET SUDAH ADA", "Lu sudah punya tiket yang masih terbuka: <#" + existing.channelId + ">. Selesaikan tiket itu sebelum membuat tiket baru.");
@@ -846,7 +884,7 @@ async function handleTicketButton(interaction) {
     return;
   }
   const staff = hasStaffRole(interaction.member);
-  if (ticket.buyerId !== interaction.user.id && !staff) {
+  if (!canAccessTicket(ticket, interaction.user.id, staff)) {
     await interaction.reply(v2Payload({content:"Hanya pembuat tiket atau Founder/Admin yang dapat menutup tiket ini.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
     return;
   }
@@ -909,6 +947,7 @@ async function handleInteraction(interaction) {
   if (interaction.commandName === "panel") { await showFounderPanel(interaction); return; }
   if (interaction.commandName === "catalog") {
     if (!interaction.inGuild()) { await interaction.reply(v2Payload({ content: "Katalog publik hanya bisa dibuat di channel server.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 })); return; }
+    if (!hasStaffRole(interaction.member)) { await interaction.reply(v2Payload({ content: "Command /catalog hanya untuk Founder/Admin. Member cukup menggunakan pesan katalog publik yang sudah tersedia.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 })); return; }
     await upsertPersistentPanel(interaction, "catalog", await buildCatalogPayload());
   }
 }
@@ -949,28 +988,47 @@ async function main() {
   client.on(Events.GuildChannelDelete, channel => {
     void (async () => {
       const db = getDatabase();
-      const tickets = await db.collection("tickets").find({
-        channelId: channel.id,
-        status: "open",
-      }).toArray();
+      const guildId = channel.guild?.id || null;
+      const filter = guildId
+        ? { guildId, channelId: channel.id, status: "open" }
+        : { channelId: channel.id, status: "open" };
+      const tickets = await db.collection("tickets").find(filter).toArray();
+      // Bot-driven archival marks the ticket as closing/closed before deleting the channel.
+      // Only treat deletion of an open ticket as unexpected loss.
       if (!tickets.length) return;
+
       const now = new Date();
-      await db.collection("tickets").updateMany(
-        { channelId: channel.id, status: "open" },
-        { $set: { status: "deleted", closedAt: now, closeReason: "discord_channel_deleted", cleanupAt: now } },
-      );
+      await db.collection("tickets").updateMany(filter, {
+        $set: {
+          status: "deleted",
+          closedAt: now,
+          closeReason: "discord_channel_deleted",
+          cleanupAt: now,
+          transcriptStatus: "unavailable",
+        },
+      });
+      const orderFilter = guildId ? { guildId, channelId: channel.id } : { channelId: channel.id };
       await db.collection("orders").updateMany(
-        { channelId: channel.id, status: "ON HOLD" },
-        { $set: { status: "CANCELLED", cancelledAt: now, cancelledBy: channel.client.user.id, cancelReason: "ticket_channel_deleted", updatedAt: now } },
+        { ...orderFilter, status: "ON HOLD" },
+        { $set: { status: "CANCELLED", paymentStatus: "cancelled", cancelledAt: now, cancelledBy: client.user.id, cancelReason: "ticket_channel_deleted", transcriptStatus: "unavailable", updatedAt: now } },
+      );
+      await db.collection("payment_proofs").updateMany(
+        { ...orderFilter, status: "pending" },
+        { $set: { status: "superseded", supersededAt: now, supersededReason: "ticket_channel_deleted", updatedAt: now }, $unset: { reviewSendingAt: "" } },
+      );
+      // Preserve paid/in-progress order states, but mark missing transcripts for manual review.
+      await db.collection("orders").updateMany(
+        { ...orderFilter, status: { $in: ["PROSES", "DONE"] }, ticketClosedAt: { $exists: false } },
+        { $set: { ticketCloseBlockedAt: now, ticketCloseBlockedReason: "channel_missing_before_archive", ticketChannelMissingAt: now, transcriptStatus: "unavailable", updatedAt: now }, $unset: { closeProcessingAt: "" } },
       );
       await db.collection("audit_logs").insertOne({
         action: "ticket.channel_deleted",
         actorId: null,
-        guildId: channel.guild?.id || tickets[0].guildId,
-        details: { channelId: channel.id, ticketIds: tickets.map(ticket => String(ticket._id)), reason: "channel_deleted_in_discord" },
+        guildId: guildId || tickets[0].guildId,
+        details: { channelId: channel.id, ticketIds: tickets.map(ticket => String(ticket._id)), reason: "channel_deleted_in_discord", transcriptStatus: "unavailable" },
         createdAt: now,
       }).catch(() => {});
-      console.log("[tickets] Cleaned up " + tickets.length + " ticket record(s) for deleted channel " + channel.id + ".");
+      console.warn("[tickets] Unexpectedly deleted open ticket channel; records preserved and cleanup metadata updated:", channel.id);
     })().catch(error => logError("ticket-channel-delete-cleanup", error));
   });
   client.on(Events.MessageCreate, message => {
@@ -986,7 +1044,7 @@ async function main() {
     await refreshGlobalCommands();
   } catch (error) {
     logError("global-command-refresh", error);
-    console.error("Bot tetap berjalan, tetapi command global belum berhasil diperbarui. Jalankan npm run commands:refresh setelah memperbaiki error.");
+    console.error("Bot tetap berjalan, tetapi slash command guild belum berhasil diperbarui. Periksa DISCORD_GUILD_ID dan jalankan npm run commands:refresh setelah memperbaiki error.");
   }
 }
 
