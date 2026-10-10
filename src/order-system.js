@@ -285,17 +285,105 @@ function escapeHtml(value) {
   })[character]);
 }
 
+function safeHttpUrl(value) {
+  const url = String(value ?? "");
+  return /^https?:\/\/[^\s"'<>]+$/i.test(url) ? url : "";
+}
+
+function transcriptLink(url, label, className = "") {
+  const safe = safeHttpUrl(url);
+  if (!safe) return escapeHtml(label || url || "");
+  return '<a' + (className ? ' class="' + escapeHtml(className) + '"' : "") +
+    ' href="' + escapeHtml(safe) + '" target="_blank" rel="noopener noreferrer">' +
+    escapeHtml(label || safe) + '</a>';
+}
+
 function componentTranscriptText(components, depth = 0) {
   if (!Array.isArray(components) || depth > 8) return [];
   const output = [];
   for (const component of components) {
-    if (component?.content) output.push(String(component.content));
-    if (component?.description) output.push(String(component.description));
+    const content = component?.content ?? component?.data?.content;
+    const description = component?.description ?? component?.data?.description;
+    const label = component?.label ?? component?.data?.label;
+    if (content) output.push(String(content));
+    if (description) output.push(String(description));
+    if (label && component?.type !== 1) output.push(String(label));
     if (component?.components) output.push(...componentTranscriptText(component.components, depth + 1));
     if (component?.items) output.push(...componentTranscriptText(component.items, depth + 1));
     if (component?.accessory) output.push(...componentTranscriptText([component.accessory], depth + 1));
   }
-  return output;
+  return [...new Set(output.map(value => value.trim()).filter(Boolean))];
+}
+
+function componentTranscriptMedia(components, depth = 0) {
+  if (!Array.isArray(components) || depth > 8) return [];
+  const output = [];
+  for (const component of components) {
+    const mediaUrl = component?.media?.url ?? component?.data?.media?.url ?? component?.url ?? component?.data?.url;
+    if (mediaUrl && safeHttpUrl(mediaUrl)) output.push({
+      url: mediaUrl,
+      description: component?.description ?? component?.data?.description ?? "Gambar dari pesan Discord",
+    });
+    if (component?.components) output.push(...componentTranscriptMedia(component.components, depth + 1));
+    if (component?.items) output.push(...componentTranscriptMedia(component.items, depth + 1));
+    if (component?.accessory) output.push(...componentTranscriptMedia([component.accessory], depth + 1));
+  }
+  const seen = new Set();
+  return output.filter(item => {
+    if (seen.has(item.url)) return false;
+    seen.add(item.url);
+    return true;
+  });
+}
+
+function transcriptImage(url, alt, className = "attachment-image") {
+  const safe = safeHttpUrl(url);
+  if (!safe) return "";
+  return '<a class="image-link" href="' + escapeHtml(safe) + '" target="_blank" rel="noopener noreferrer">' +
+    '<img class="' + escapeHtml(className) + '" src="' + escapeHtml(safe) + '" alt="' + escapeHtml(alt || "Gambar lampiran") +
+    '" loading="lazy" referrerpolicy="no-referrer"></a>';
+}
+
+function renderTranscriptEmbed(embed) {
+  const author = embed.author?.name
+    ? '<div class="embed-author">' + (embed.author.iconURL ? transcriptImage(embed.author.iconURL, "", "embed-author-icon") : "") +
+      (embed.author.url ? transcriptLink(embed.author.url, embed.author.name) : escapeHtml(embed.author.name)) + '</div>'
+    : "";
+  const title = embed.title
+    ? '<div class="embed-title">' + (embed.url ? transcriptLink(embed.url, embed.title) : escapeHtml(embed.title)) + '</div>'
+    : "";
+  const description = embed.description ? '<div class="embed-description">' + escapeHtml(embed.description) + '</div>' : "";
+  const fields = (embed.fields || []).map(field =>
+    '<div class="embed-field' + (field.inline ? ' inline' : '') + '"><div class="embed-field-name">' +
+    escapeHtml(field.name) + '</div><div class="embed-field-value">' + escapeHtml(field.value) + '</div></div>'
+  ).join("");
+  const image = embed.image?.url ? transcriptImage(embed.image.url, embed.title || "Gambar embed", "embed-image") : "";
+  const thumbnail = embed.thumbnail?.url ? transcriptImage(embed.thumbnail.url, embed.title || "Thumbnail embed", "embed-thumbnail") : "";
+  const footer = embed.footer?.text
+    ? '<div class="embed-footer">' + (embed.footer.iconURL ? transcriptImage(embed.footer.iconURL, "", "embed-footer-icon") : "") +
+      escapeHtml(embed.footer.text) + (embed.timestamp ? ' • ' + escapeHtml(new Date(embed.timestamp).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })) : "") + '</div>'
+    : "";
+  if (!author && !title && !description && !fields && !image && !thumbnail && !footer) return "";
+  const color = Number.isInteger(embed.color) ? '#' + embed.color.toString(16).padStart(6, "0") : "#5865f2";
+  return '<section class="discord-embed" style="--embed-color:' + color + '">' + author + title + description +
+    (thumbnail ? '<div class="embed-content-with-thumb">' + thumbnail + '</div>' : "") + fields + image + footer + '</section>';
+}
+
+function transcriptMessageText(message) {
+  let text = String(message.content || "");
+  text = text.replace(/<@!?(\d+)>/g, (match, id) => {
+    const user = message.mentions?.users?.get(id);
+    return user ? "@" + (user.globalName || user.username) : match;
+  });
+  text = text.replace(/<@&(\d+)>/g, (match, id) => {
+    const role = message.mentions?.roles?.get(id);
+    return role ? "@" + role.name : match;
+  });
+  text = text.replace(/<#(\d+)>/g, (match, id) => {
+    const channel = message.mentions?.channels?.get(id);
+    return channel ? "#" + channel.name : match;
+  });
+  return text;
 }
 
 function transcriptSuffix() {
@@ -360,22 +448,80 @@ export async function archiveAndDeleteTicket({ channel, ticket, client, closedBy
       if (batch.size < 100) break;
     }
     messages.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+    const messageById = new Map(messages.map(message => [message.id, message]));
     const rows = messages.map(message => {
-      const author = message.author?.tag || message.author?.username || "Unknown";
-      const text = [message.content, ...componentTranscriptText(message.components)].filter(Boolean).join("\n\n");
-      const attachments = [...(message.attachments?.values?.() || [])].map(file =>
-        '<li><a href="' + escapeHtml(file.url) + '">' + escapeHtml(file.name || "attachment") + '</a></li>'
+      const author = message.member?.displayName || message.author?.globalName || message.author?.username || "Unknown";
+      const avatar = message.author?.displayAvatarURL?.({ size: 64 }) || "";
+      const botBadge = message.author?.bot ? '<span class="bot-badge">BOT</span>' : "";
+      const timestamp = new Date(message.createdTimestamp).toLocaleString("id-ID", {
+        timeZone: "Asia/Jakarta", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit",
+      });
+      const replyTo = message.reference?.messageId ? messageById.get(message.reference.messageId) : null;
+      const reply = replyTo
+        ? '<div class="reply-reference"><span class="reply-bar"></span><strong>' +
+          escapeHtml(replyTo.member?.displayName || replyTo.author?.globalName || replyTo.author?.username || "Unknown") +
+          '</strong> ' + escapeHtml(transcriptMessageText(replyTo).slice(0, 180) || "[pesan embed/lampiran]") + '</div>'
+        : "";
+      const text = transcriptMessageText(message);
+      const componentsText = componentTranscriptText(message.components);
+      const componentMedia = componentTranscriptMedia(message.components).map(item =>
+        '<div class="component-media">' + transcriptImage(item.url, item.description) +
+        (item.description ? '<div class="attachment-meta"><span>' + escapeHtml(item.description) + '</span></div>' : "") + '</div>'
       ).join("");
-      const body = text ? '<pre>' + escapeHtml(text) + '</pre>' : "";
-      return '<article><header><strong>' + escapeHtml(author) + '</strong> <time>' +
-        escapeHtml(new Date(message.createdTimestamp).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })) +
-        '</time></header>' + body + (attachments ? '<ul>' + attachments + '</ul>' : "") + '</article>';
+      const content = text ? '<div class="message-content">' + escapeHtml(text).replace(/\n/g, "<br>") + '</div>' : "";
+      const componentPanel = componentsText.length
+        ? '<div class="component-panel">' + componentsText.map(line => '<div>' + escapeHtml(line).replace(/\n/g, "<br>") + '</div>').join("") + '</div>'
+        : "";
+      const embeds = [...(message.embeds || [])].map(renderTranscriptEmbed).join("");
+      const attachments = [...(message.attachments?.values?.() || [])].map(file => {
+        const url = safeHttpUrl(file.url);
+        const name = file.name || "attachment";
+        const type = String(file.contentType || "").toLowerCase();
+        const isImage = type.startsWith("image/") || /\.(png|jpe?g|gif|webp|avif|bmp)$/i.test(name);
+        const preview = isImage ? transcriptImage(url, name) : "";
+        return '<div class="attachment">' + (preview ? preview : '<div class="file-icon">↗</div>') +
+          '<div class="attachment-meta">' + transcriptLink(url, name, "attachment-name") +
+          '<span>' + escapeHtml(type || "File lampiran") + (Number.isFinite(file.size) ? ' • ' + escapeHtml((file.size / 1024).toFixed(1)) + ' KB' : "") +
+          '</span></div></div>';
+      }).join("");
+      const stickers = [...(message.stickers?.values?.() || [])].map(sticker =>
+        '<div class="sticker-note">[Sticker: ' + escapeHtml(sticker.name) + ']</div>'
+      ).join("");
+      const systemClass = message.author?.bot ? " bot-message" : "";
+      return '<article class="message' + systemClass + '">' +
+        '<div class="avatar-wrap">' + (safeHttpUrl(avatar) ? '<img class="avatar" src="' + escapeHtml(avatar) + '" alt="" loading="lazy" referrerpolicy="no-referrer">' : '<div class="avatar avatar-fallback">?</div>') + '</div>' +
+        '<div class="message-main"><header class="message-header"><strong class="author-name">' + escapeHtml(author) +
+        '</strong>' + botBadge + '<span class="username">' + escapeHtml(message.author?.tag || message.author?.username || "") +
+        '</span><time>' + escapeHtml(timestamp) + '</time></header>' + reply + content + componentPanel + embeds +
+        (attachments ? '<div class="attachments">' + attachments + '</div>' : "") + stickers + '</div></article>';
     }).join("\n");
-    const html = '<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>RapStore Ticket Transcript</title><style>body{font:14px system-ui,sans-serif;background:#111827;color:#e5e7eb;margin:0;padding:24px}h1{font-size:22px}p{color:#9ca3af}article{background:#1f2937;border-radius:8px;padding:14px;margin:12px 0;overflow-wrap:anywhere}header{display:flex;gap:12px;justify-content:space-between;border-bottom:1px solid #374151;padding-bottom:8px}time{color:#9ca3af;font-size:12px}pre{white-space:pre-wrap;font:inherit;margin:12px 0}a{color:#93c5fd}</style></head><body><h1>RapStore — Ticket Transcript</h1><p>Channel: ' +
-      escapeHtml(channel.name) + ' • Ticket: ' + escapeHtml(ticket.ticketPrefix ? ticket.ticketPrefix + "-" + ticket.ticketNumber : channel.name) +
-      ' • Closed by: ' + escapeHtml(effectiveClosedBy || "system") + ' • Reason: ' + escapeHtml(effectiveReason) + '</p>' + rows + '</body></html>';
+    const guildName = channel.guild?.name || "Discord Server";
     const baseName = clean(ticket.ticketPrefix && Number.isInteger(ticket.ticketNumber)
       ? ticket.ticketPrefix + "-" + ticket.ticketNumber : channel.name.replace(/^closed-/, ""), 80).replace(/[^a-zA-Z0-9_-]/g, "-");
+    const html = '<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="dark"><title>' +
+      escapeHtml(baseName) + ' — RapStore Transcript</title><style>' +
+      ':root{color-scheme:dark;--bg:#313338;--panel:#2b2d31;--muted:#949ba4;--text:#dbdee1;--line:#3f4147;--accent:#5865f2}' +
+      '*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}' +
+      '.topbar{position:sticky;top:0;z-index:5;background:#232428;border-bottom:1px solid #1e1f22;padding:16px 22px;box-shadow:0 2px 8px #0003}' +
+      '.brand{font-weight:800;font-size:16px;color:#fff}.subtitle{font-size:12px;color:var(--muted);margin-top:5px;overflow-wrap:anywhere}' +
+      '.layout{max-width:1100px;margin:0 auto;padding:24px 22px 48px}.ticket-info{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px;margin-bottom:24px}' +
+      '.ticket-title{font-size:20px;font-weight:750;color:#fff;margin-bottom:8px}.info-grid{display:flex;flex-wrap:wrap;gap:8px 20px;color:var(--muted);font-size:12px}.info-grid b{color:var(--text)}' +
+      '.message{display:flex;gap:14px;padding:9px 10px;margin:0 -10px;border-radius:6px}.message:hover{background:#2e3035}.avatar-wrap{flex:0 0 40px}.avatar{width:40px;height:40px;object-fit:cover;border-radius:50%;background:#1e1f22}.avatar-fallback{display:grid;place-items:center;color:#fff;font-weight:700}' +
+      '.message-main{min-width:0;flex:1}.message-header{display:flex;align-items:baseline;flex-wrap:wrap;gap:7px;margin:0 0 3px}.author-name{color:#f2f3f5;font-weight:650}.username,time{font-size:11px;color:var(--muted)}.bot-badge{background:#5865f2;color:#fff;font-size:9px;font-weight:800;padding:2px 4px;border-radius:3px;letter-spacing:.4px}' +
+      '.message-content{white-space:normal;overflow-wrap:anywhere}.component-panel{margin-top:7px;padding:10px 12px;background:#2b2d31;border-left:4px solid var(--accent);border-radius:4px;overflow-wrap:anywhere}.component-panel>div+div{margin-top:4px}' +
+      '.reply-reference{font-size:12px;color:var(--muted);margin:0 0 7px;display:flex;gap:6px;align-items:baseline;overflow-wrap:anywhere}.reply-reference strong{color:#c9cdfb;flex-shrink:0}.reply-bar{height:10px;width:28px;border-top:2px solid #6d6f78;border-left:2px solid #6d6f78;flex-shrink:0}' +
+      '.discord-embed{position:relative;margin-top:8px;padding:12px 14px;background:#2b2d31;border-left:4px solid var(--embed-color);border-radius:4px;max-width:680px;overflow:hidden}.embed-author{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:600;margin-bottom:7px}.embed-author-icon{width:20px;height:20px;border-radius:50%;object-fit:cover}.embed-title{font-weight:700;color:#00a8fc;margin-bottom:5px;overflow-wrap:anywhere}.embed-title a,.embed-author a{color:#00a8fc;text-decoration:none}.embed-description,.embed-field-value{white-space:pre-wrap;overflow-wrap:anywhere}.embed-fields{display:flex}.embed-field{margin-top:10px}.embed-field-name{font-weight:700;margin-bottom:3px}.embed-image{display:block;max-width:min(100%,520px);max-height:420px;object-fit:contain;object-position:left;border-radius:4px;margin-top:10px}.embed-thumbnail{float:right;max-width:100px;max-height:100px;object-fit:contain;margin:0 0 8px 12px;border-radius:4px}.embed-footer{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted);margin-top:10px}.embed-footer-icon{width:18px;height:18px;border-radius:50%;object-fit:cover}' +
+      '.component-media{margin-top:8px}.attachments{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px}.attachment{max-width:100%;display:flex;flex-direction:column;gap:6px;align-items:flex-start}.attachment-image{display:block;max-width:min(100%,560px);max-height:560px;object-fit:contain;object-position:left top;border-radius:8px;border:1px solid #202127;background:#232428}.image-link{display:inline-block;max-width:100%}.attachment-meta{display:flex;flex-direction:column;gap:2px;font-size:12px}.attachment-name{color:#00a8fc;text-decoration:none;font-weight:600;overflow-wrap:anywhere}.attachment-meta span{color:var(--muted);font-size:11px}.file-icon{width:42px;height:42px;display:grid;place-items:center;background:#232428;border:1px solid var(--line);border-radius:6px;font-size:22px}.sticker-note{color:var(--muted);font-size:12px;margin-top:6px}' +
+      '.footer{border-top:1px solid var(--line);padding-top:14px;margin-top:24px;color:var(--muted);font-size:11px;text-align:center}' +
+      '@media(max-width:600px){.topbar{padding:13px 14px}.layout{padding:16px 14px 32px}.message{gap:9px}.avatar-wrap{flex-basis:34px}.avatar{width:34px;height:34px}.message-header{gap:5px}.username{display:none}.attachment-image{max-height:380px}.discord-embed{padding:10px}.ticket-title{font-size:18px}}' +
+      '</style></head><body><div class="topbar"><div class="brand">💬 RapStore — Ticket Transcript</div><div class="subtitle">' +
+      escapeHtml(guildName) + ' • #' + escapeHtml(channel.name) + '</div></div><main class="layout"><section class="ticket-info"><div class="ticket-title"># ' +
+      escapeHtml(baseName) + '</div><div class="info-grid"><span><b>Pesan:</b> ' + messages.length +
+      '</span><span><b>Ditutup oleh:</b> ' + escapeHtml(effectiveClosedBy ? '<@' + effectiveClosedBy + '>' : "Sistem") +
+      '</span><span><b>Alasan:</b> ' + escapeHtml(effectiveReason) + '</span><span><b>Waktu arsip:</b> ' +
+      escapeHtml(new Date().toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })) + ' WIB</span></div></section>' +
+      (rows || '<p>Channel ini tidak memiliki pesan yang dapat diarsipkan.</p>') +
+      '<div class="footer">Transcript dibuat oleh RapStore Assistant • Tampilan arsip tidak dapat memuat ulang pesan yang sudah dihapus dari Discord.</div></main></body></html>';
     const filename = baseName + "-#" + transcriptSuffix() + ".html";
 
     // If a previous attempt uploaded the file but failed before saving its message ID,
