@@ -59,7 +59,9 @@ function divider(container) {
 async function allocateTicketNumber(kind) {
   const db = getDatabase();
   const counters = db.collection("counters");
-  const key = kind === "order" ? "ticket:order" : "ticket:question";
+  // Keep order and support sequences independent. Order starts at rap-1;
+  // support starts at support-0 and is reserved for the support flow being added later.
+  const key = kind === "order" ? "ticket:order" : "ticket:support";
   const initial = kind === "order" ? 0 : -1;
   try {
     await counters.updateOne({ _id: key }, { $setOnInsert: { sequence: initial, createdAt: new Date() } }, { upsert: true });
@@ -74,7 +76,7 @@ async function allocateTicketNumber(kind) {
   const counter = result?.value ?? result;
   if (!Number.isSafeInteger(counter?.sequence) || counter.sequence < 0) throw new Error("Ticket counter returned an invalid sequence.");
   const number = counter.sequence;
-  return { number, channelName: (kind === "order" ? "rap-" : "tanya-") + number };
+  return { number, channelName: (kind === "order" ? "rap-" : "support-") + number };
 }
 
 async function orderCategories() {
