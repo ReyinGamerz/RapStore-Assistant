@@ -31,7 +31,8 @@ function safeText(value, max = 500) {
   return String(value ?? "").replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, max);
 }
 function buildCategoryModal(action, current = null) {
-  const modal=new ModalBuilder().setCustomId("rapstore:panelmodal:category:"+action+(current?":"+encodeCategory(current.name):"")).setTitle(action==="add"?"Tambah Kategori":"Edit Kategori");
+  const reference = current ? (current._id ? String(current._id) : encodeCategory(current.name)) : "";
+  const modal=new ModalBuilder().setCustomId("rapstore:panelmodal:category:"+action+(current?":"+reference:"")).setTitle(action==="add"?"Tambah Kategori":"Edit Kategori");
   const name=new TextInputBuilder().setCustomId("nama_kategori").setLabel("Nama kategori").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(80);
   if(current?.name) name.setValue(current.name);
   const emoji=new TextInputBuilder().setCustomId("emoji_kategori").setLabel("Emoji kategori (opsional)").setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(100);
@@ -77,6 +78,18 @@ async function findCanonicalCategory(name) {
   const values = await getDatabase().collection("products").distinct("category");
   const fromProducts = values.find(value => typeof value === "string" && safeText(value,80).toLocaleLowerCase("id-ID") === wanted);
   return fromProducts ? safeText(fromProducts,80) : null;
+}
+async function ensureCategoryRecord(name, emoji = "") {
+  const collection = getDatabase().collection("categories");
+  let record = await collection.findOne({ name });
+  if (!record) {
+    const result = await collection.insertOne({ name, emoji, createdAt: new Date(), migrated: true });
+    record = await collection.findOne({ _id: result.insertedId });
+  } else if (!record.emoji && emoji) {
+    await collection.updateOne({ _id: record._id }, { $set: { emoji, updatedAt: new Date() } });
+    record.emoji = emoji;
+  }
+  return record;
 }
 async function synchronizeCategoryData() {
   const db = getDatabase();
