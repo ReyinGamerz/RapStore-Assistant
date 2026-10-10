@@ -30,19 +30,6 @@ async function audit(action, interaction, details = {}) {
 function safeText(value, max = 500) {
   return String(value ?? "").replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, max);
 }
-async function showFounderPanel(interaction) {
-  if (!interaction.inGuild() || !hasStaffRole(interaction.member)) {
-    await interaction.reply(v2Payload({ content: "Panel hanya untuk Founder/Admin.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
-    return;
-  }
-  const panel = buildPanel("RAPSTORE — PANEL KATALOG", "Kelola nama, kategori, deskripsi, dan harga produk. Panel ini hanya untuk Founder/Admin.", ["Gunakan /catalog untuk melihat tampilan katalog pembeli."]);
-  panel.addActionRowComponents(new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId("rapstore:panel:add").setLabel("Tambah Produk").setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId("rapstore:panel:edit").setLabel("Edit Produk").setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId("rapstore:panel:list").setLabel("Daftar Produk").setStyle(ButtonStyle.Secondary)
-  ));
-  await interaction.reply({ flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral, components: [panel] });
-}
 async function getProductCategories() {
   const values = await getDatabase().collection("products").distinct("category");
   const categories = [...new Set(values.map(v => safeText(v || "Umum", 80)).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
