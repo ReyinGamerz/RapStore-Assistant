@@ -220,12 +220,12 @@ async function renderCatalogPanel(interaction, selectedCategory = "", selectedPr
         const displayName = isServerBoost
           ? name.replace(/\b(\d+x)\b/g, "`$1`").replace(/\b(\d+)\s+Month\b/gi, "`$1` Month")
           : name;
-        lines.push("### " + (isServerBoost ? "💎 " : "✨ ") + displayName);
-        if (description) {
+        lines.push("### " + displayName);
+        if (description && !isServerBoost) {
           lines.push(description.slice(0, 900));
           lines.push("");
         }
-        lines.push("**Harga:** " + formatPrice(retail));
+        lines.push("**Harga:** `" + formatPrice(retail) + "`");
       }
     }
   }
