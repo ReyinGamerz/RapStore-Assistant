@@ -20,7 +20,15 @@ import { ObjectId } from "mongodb";
 import { config } from "./config.js";
 import { getDatabase } from "./database.js";
 import { buildPanel } from "./ui.js";
-import { MAX_TRANSCRIPT_MESSAGES, MAX_TRANSCRIPT_ATTACHMENT_BYTES, validateProofAttachments } from "./security.js";
+import {
+  MAX_TRANSCRIPT_MESSAGES,
+  MAX_TRANSCRIPT_ATTACHMENT_BYTES,
+  validateProofAttachments,
+  isStaffMember,
+  canAccessTicket,
+  escapeDiscordMarkdown,
+  expectedProofStatus,
+} from "./security.js";
 
 const V2 = MessageFlags.IsComponentsV2;
 const EPHEMERAL = MessageFlags.Ephemeral;
@@ -33,7 +41,7 @@ function price(value) {
   return "Rp " + Number(value || 0).toLocaleString("id-ID");
 }
 function staff(member) {
-  return Boolean(member?.roles?.cache?.has(config.ids.founderRole) || member?.roles?.cache?.has(config.ids.adminRole));
+  return isStaffMember(member, [config.ids.founderRole, config.ids.adminRole]);
 }
 function v2(container, ephemeral = false) {
   return { flags: V2 | (ephemeral ? EPHEMERAL : 0), components: [container] };
@@ -195,6 +203,172 @@ function buildPaymentPicker() {
   ));
   return v2(container);
 }
+
+function paymentReviewResultPayload(title, body) {
+  return {
+    ...v2(buildPanel(title, body)),
+    allowedMentions: { parse: [], users: [], roles: [] },
+  };
+}
+
+async function updatePaymentReviewMessage(interaction, title, body) {
+  const payload = paymentReviewResultPayload(title, body);
+  try {
+    await interaction.update(payload);
+    return true;
+  } catch (error) {
+    // A failure in the interaction callback must not leave the visible review controls stale
+    // when the bot still has permission to edit its message directly.
+    console.error("[payment-review-message-update]", error?.message || error);
+    try {
+      if (interaction.message?.editable) {
+        await interaction.message.edit(payload);
+        return true;
+      }
+    } catch (fallbackError) {
+      console.error("[payment-review-message-edit]", fallbackError?.message || fallbackError);
+    }
+    return false;
+  }
+}
+
+function buildPaymentReviewNotice(proof, order) {
+  const roleMentions = [config.ids.founderRole, config.ids.adminRole].filter(Boolean);
+  const attachments = Array.isArray(proof.attachments) ? proof.attachments : [];
+  const proofLines = attachments.map((attachment, index) => {
+    const name = escapeDiscordMarkdown(clean(attachment.name || "bukti-transfer", 200));
+    const url = safeHttpUrl(attachment.url);
+    return url
+      ? "[" + (index + 1) + ". " + name + "](<" + url + ">)"
+      : "**" + (index + 1) + ". " + name + "**";
+  });
+  const panel = buildPanel(
+    "VERIFIKASI BUKTI TRANSFER",
+    roleMentions.map(id => "<@" + id + ">").join(" ") + "\n" +
+    "**Pesanan:** " + clean(order.orderCode, 40) + "\n" +
+    "**Pengirim:** <@" + clean(proof.buyerId, 30) + ">\n" +
+    "**Metode:** " + (order.paymentMethod === "qris" ? "QRIS" : "BANK") + "\n" +
+    "**Nominal yang harus dibayar:** " + price(order.totalPrice) + "\n\n" +
+    "**Lampiran bukti:**\n" + (proofLines.join("\n") || "Tidak ada lampiran."),
+  );
+  panel.addActionRowComponents(new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId("rapstore:payment:process:" + String(proof._id)).setLabel("PROSES").setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId("rapstore:payment:invalid:" + String(proof._id)).setLabel("TIDAK VALID").setStyle(ButtonStyle.Danger),
+  ));
+  return {
+    flags: V2,
+    components: [panel],
+    allowedMentions: { roles: roleMentions, users: [], parse: [] },
+  };
+}
+
+function paymentReviewMessageHasProof(message, proofId) {
+  const target = "rapstore:payment:process:" + String(proofId);
+  try {
+    return JSON.stringify((message.components || []).map(component => component.toJSON?.() ?? component)).includes(target);
+  } catch {
+    return false;
+  }
+}
+
+async function reconcilePaymentProofStatuses(db) {
+  const proofs = await db.collection("payment_proofs").find({ status: "pending" })
+    .sort({ createdAt: 1 }).limit(100).toArray();
+  for (const proof of proofs) {
+    let order = null;
+    if (ObjectId.isValid(String(proof.orderId || ""))) {
+      order = await db.collection("orders").findOne({
+        _id: new ObjectId(proof.orderId),
+        guildId: proof.guildId,
+        channelId: proof.channelId,
+      }).catch(error => {
+        console.error("[payment-proof-reconcile-order]", error?.message || error);
+        return null;
+      });
+    }
+    const targetStatus = expectedProofStatus(proof, order);
+    if (!targetStatus || targetStatus === "pending") continue;
+    const now = new Date();
+    const changes = { status: targetStatus, updatedAt: now };
+    if (targetStatus === "accepted" || targetStatus === "rejected") {
+      changes.reviewedAt = proof.reviewedAt || now;
+      changes.reviewedBy = proof.reviewedBy || order?.reviewedBy || null;
+    } else {
+      changes.supersededAt = now;
+      changes.supersededReason = !order ? "order_missing" : "order_state_changed";
+    }
+    await db.collection("payment_proofs").updateOne(
+      { _id: proof._id, status: "pending" },
+      { $set: changes },
+    ).catch(error => console.error("[payment-proof-reconcile-update]", error?.message || error));
+  }
+}
+
+async function ensurePendingPaymentNotices(client, db) {
+  const proofs = await db.collection("payment_proofs").find({ status: "pending" })
+    .sort({ createdAt: 1 }).limit(100).toArray();
+  for (const proof of proofs) {
+    let order = null;
+    if (ObjectId.isValid(String(proof.orderId || ""))) {
+      order = await db.collection("orders").findOne({
+        _id: new ObjectId(proof.orderId),
+        guildId: proof.guildId,
+        channelId: proof.channelId,
+      }).catch(error => {
+        console.error("[payment-proof-notice-order]", error?.message || error);
+        return null;
+      });
+    }
+    if (expectedProofStatus(proof, order) !== "pending") continue;
+
+    const channel = await client.channels.fetch(String(proof.channelId || "")).catch(error => {
+      if (Number(error?.code) !== 10003) console.error("[payment-proof-notice-channel]", error?.message || error);
+      return null;
+    });
+    if (!channel || typeof channel.send !== "function" || !channel.messages) continue;
+
+    if (proof.reviewMessageId && String(proof.reviewChannelId || proof.channelId) === String(channel.id)) {
+      const existing = await channel.messages.fetch(proof.reviewMessageId).catch(() => null);
+      if (existing && paymentReviewMessageHasProof(existing, proof._id)) continue;
+    }
+
+    let existingNotice = null;
+    let before;
+    for (let page = 0; page < 3 && !existingNotice; page++) {
+      const batch = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) }).catch(error => {
+        console.error("[payment-proof-notice-search]", error?.message || error);
+        return null;
+      });
+      if (!batch?.size) break;
+      existingNotice = batch.find(message => paymentReviewMessageHasProof(message, proof._id)) || null;
+      before = batch.last().id;
+      if (batch.size < 100) break;
+    }
+    if (existingNotice) {
+      await db.collection("payment_proofs").updateOne({ _id: proof._id, status: "pending" }, {
+        $set: { reviewMessageId: existingNotice.id, reviewChannelId: channel.id, reviewNotifiedAt: new Date() },
+      }).catch(error => console.error("[payment-proof-notice-save]", error?.message || error));
+      continue;
+    }
+
+    // Recheck the order immediately before sending so a stale notice is not recreated.
+    const currentOrder = await db.collection("orders").findOne({
+      _id: new ObjectId(proof.orderId),
+      guildId: proof.guildId,
+      channelId: proof.channelId,
+    }).catch(() => null);
+    if (expectedProofStatus(proof, currentOrder) !== "pending") continue;
+
+    try {
+      const sent = await channel.send(buildPaymentReviewNotice(proof, currentOrder));
+      await db.collection("payment_proofs").updateOne({ _id: proof._id, status: "pending" }, {
+        $set: { reviewMessageId: sent.id, reviewChannelId: channel.id, reviewNotifiedAt: new Date() },
+      });
+    } catch (error) {
+      console.error("[payment-proof-notice-send]", proof.orderCode, error?.message || error);
+    }
+  }
+}
 function configuredPayment(method) {
   if (method === "qris") {
     const imageUrl = clean(config.payments?.qrisImageUrl, 1000);
@@ -297,7 +471,13 @@ async function refreshOrderMessage(order, client) {
       const channel = await guild.channels.fetch(order.channelId).catch(() => null);
       if (channel) {
         const message = await channel.messages.fetch(order.orderMessageId).catch(() => null);
-        if (message) await message.edit(await buildOrderPanel(order));
+        if (message) {
+          try {
+            await message.edit(await buildOrderPanel(order));
+          } catch (error) {
+            console.error("[order-panel-refresh]", order.orderCode, error?.message || error);
+          }
+        }
       }
     }
   }
