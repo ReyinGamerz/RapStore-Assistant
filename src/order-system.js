@@ -720,9 +720,9 @@ async function publishPendingVouches(client) {
       ));
       divider(panel);
       panel.addTextDisplayComponents(new TextDisplayBuilder().setContent(
-        "> Thank you for trusting **RapStore**.\n\n-# Trusted. Fast. Secure. Professional.\n-# RAP TESTIMONI • " + date,
+        "> Thank you for trusting **RapStore**.\n\n-# Trusted. Fast. Secure. Professional.\n-# RAP TESTIMONI • " + date + "\n-# " + marker,
       ));
-      const sent = await channel.send({
+      const sent = existingMessage || await channel.send({
         flags: V2, components: [panel],
         allowedMentions: { parse: [], users: [], roles: [] },
       });
