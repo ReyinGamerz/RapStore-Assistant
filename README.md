@@ -40,11 +40,12 @@ For a new install, run `npm install`, copy `.env.example` to `.env`, then set `D
 - Each user can have only one open ticket per server, regardless of ticket type.
 - Tickets are created under `SUPPORT_CATEGORY_ID`. Category and product dropdowns in order tickets reuse their saved custom/unicode emojis from the catalog.
 - Consultation tickets are for discussion and keep the confirmed-close flow. Closing a ticket uploads a readable HTML transcript with a random five-character suffix (for example `rap-1-#8buH7.html`) to `TRANSCRIPT_CHANNEL_ID`, then deletes the Discord ticket channel.
+- Founder/Admin can use `!close` in any open ticket to archive the transcript immediately. The bot uploads the HTML transcript first and only then marks the ticket closed and deletes the channel. If transcript upload fails, the channel is kept open and the bot posts an error notice.
 - Order tickets create a MongoDB order record and a Components V2 panel with category, product, amount (1–25), unit price, total price, and status. Total price is recalculated when a selection changes.
 - Order statuses: `ON HOLD`, `PROSES`, `DONE`, and `CANCELLED`. Cancelling is available while the order is `ON HOLD` and requires confirmation. The bot archives a transcript before deleting the ticket. Once processing starts, cancellation is disabled.
 - Founder/Admin can mark an order `DONE` using the button or `!done` in the order ticket, after it reaches `PROSES`.
 - Marking an order `DONE` adds a `VOUCH` button. The buyer can submit a 1–5 rating and a message; the bot publishes one Components V2 customer-testimonial panel to `VOUCH_CHANNEL_ID`. If no vouch is submitted within one hour, a 5/5 automatic vouch is published.
-- One hour after `DONE`, the bot publishes/ensures the vouch exists, uploads the ticket transcript, then deletes the order ticket channel. The scheduled job retries after restarts and temporary configuration/permission failures; a ticket is not deleted if the transcript cannot be uploaded.
+- One hour after `DONE`, the bot publishes/ensures the vouch exists, uploads the ticket transcript immediately before closing, then deletes the order ticket channel. The scheduled job retries after restarts and temporary configuration/permission failures; a ticket is not deleted if the transcript cannot be uploaded.
 
 ## Manual payment configuration
 Set these values in the local `.env` file after confirming the store's actual payment details:

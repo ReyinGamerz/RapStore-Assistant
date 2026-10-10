@@ -924,7 +924,37 @@ export async function handleOrderInteraction(interaction, client) {
 export async function handleOrderMessage(message, client) {
   if (!message?.guild || message.author?.bot || !message.channel) return;
   const db = getDatabase();
-  if (String(message.content || "").trim().toLowerCase() === "!done") {
+  const command = String(message.content || "").trim().toLowerCase();
+
+  if (command === "!close") {
+    const member = message.member || await message.guild.members.fetch(message.author.id).catch(() => null);
+    if (!staff(member)) {
+      await message.channel.send(v2(buildPanel("AKSES DITOLAK", "Command !close hanya bisa digunakan Founder/Admin."))).catch(() => {});
+      return;
+    }
+    const ticket = await db.collection("tickets").findOne({
+      guildId: message.guild.id, channelId: message.channel.id, status: "open",
+    });
+    if (!ticket) {
+      await message.channel.send(v2(buildPanel("TIKET TIDAK DITEMUKAN", "Command !close hanya berlaku di tiket yang masih terbuka."))).catch(() => {});
+      return;
+    }
+    try {
+      await archiveAndDeleteTicket({
+        channel: message.channel, ticket, client,
+        closedBy: message.author.id, reason: "manual_ticket_close_command",
+      });
+    } catch (error) {
+      console.error("[ticket-archive-close-command]", error?.message || error);
+      await message.channel.send(v2(buildPanel(
+        "TRANSCRIPT BELUM TERSIMPAN",
+        "Tiket tidak dihapus karena transcript gagal dikirim. Periksa TRANSCRIPT_CHANNEL_ID serta izin View Channel, Send Messages, Attach Files, dan Manage Channels untuk bot."
+      ))).catch(() => {});
+    }
+    return;
+  }
+
+  if (command === "!done") {
     const member = message.member || await message.guild.members.fetch(message.author.id).catch(() => null);
     if (!staff(member)) {
       await message.channel.send(v2(buildPanel("AKSES DITOLAK", "Command !done hanya bisa digunakan Founder/Admin."))).catch(() => {});
