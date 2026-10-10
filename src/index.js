@@ -239,7 +239,10 @@ async function renderCatalogPanel(interaction, selectedCategory = "", selectedPr
     .setPlaceholder(category ? ("Kategori: " + category).slice(0, 150) : "Pilih Kategori")
     .setMinValues(1).setMaxValues(1)
     .addOptions((categories.length ? categories : ["Belum ada kategori"]).slice(0, 25).map(c => ({
-      label: c.slice(0, 100), value: c, description: "Buka katalog kategori " + c,
+      label: c.slice(0, 100),
+      value: c,
+      description: "Buka katalog kategori " + c,
+      default: Boolean(category) && c === category,
     })));
   if (!categories.length) categoryMenu.setDisabled(true);
 
@@ -251,6 +254,7 @@ async function renderCatalogPanel(interaction, selectedCategory = "", selectedPr
     label: safeText(p.name, 100),
     value: String(p._id),
     description: ("Lihat informasi produk • " + formatPrice(p.price)).slice(0, 100),
+    default: Boolean(selectedProduct) && String(p._id) === String(selectedProduct._id),
   }));
   if (productOptions.length) productMenu.addOptions(productOptions);
   else productMenu.addOptions([{
