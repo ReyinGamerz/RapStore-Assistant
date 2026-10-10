@@ -1517,7 +1517,7 @@ export function startOrderMaintenance(client) {
   };
 }
 
-export async function initializeOrderTicket({ channel, interaction, ticketNumber, ticketId, ticketCode, selectedProduct }) {
+export async function initializeOrderTicket({ channel, interaction, ticketId, ticketCode, selectedProduct }) {
   const db = getDatabase();
   const product = selectedProduct && selectedProduct.active !== false ? selectedProduct : null;
   const unitPrice = product ? Number(product.price || 0) : 0;
