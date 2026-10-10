@@ -31,7 +31,7 @@ test("category selection updates the original catalog message", () => {
 test("product selection keeps the public catalog and opens a separate ephemeral confirmation", () => {
   const product = section(
     'if (interaction.customId === "rapstore:catalog:product")',
-    "\n}\n\nasync function createCatalogOrderTicket",
+    "\n}\n\nasync function handleCatalogPageButton",
   );
   assert.match(product, /await interaction\.deferUpdate\(\)/);
   assert.match(product, /await interaction\.editReply\(await buildCatalogPayload\(category, id\)\)/);
@@ -40,6 +40,15 @@ test("product selection keeps the public catalog and opens a separate ephemeral 
   assert.match(product, /rapstore:catalog:order:confirm:/);
   assert.match(product, /rapstore:catalog:order:cancel:/);
   assert.doesNotMatch(product, /rapstore:catalog:ticket/);
+});
+
+test("catalog category navigation displays a page counter and cycles categories", () => {
+  assert.match(source, /const category = categories\.includes\(selectedCategory\) \? selectedCategory : \(categories\[0\] \|\| ""\)/);
+  assert.match(source, /\.setCustomId\("rapstore:catalog:category-page:prev:"/);
+  assert.match(source, /\.setCustomId\("rapstore:catalog:category-page:next:"/);
+  assert.match(source, /\.setLabel\(pageLabel\)/);
+  assert.match(source, /async function handleCatalogPageButton\(interaction\)[\s\S]*?\(currentIndex \+ delta \+ categories\.length\) % categories\.length/);
+  assert.match(source, /await handleCatalogPageButton\(interaction\); return;/);
 });
 
 test("catalog no longer exposes a ticket-destination dropdown", () => {
