@@ -752,7 +752,6 @@ async function handleCatalogSelection(interaction) {
   const db = getDatabase();
   // Public catalog interactions create a private copy so one member's choices
   // cannot change the selections currently displayed to every other member.
-  const fromPublicCatalog = !interaction.message.flags.has(MessageFlags.Ephemeral);
 
   if (interaction.customId === "rapstore:catalog:category") {
     const category = safeText(interaction.values[0], 80);
