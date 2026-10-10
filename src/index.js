@@ -638,7 +638,7 @@ async function catalogData(db) {
 async function buildCatalogPayload(selectedCategory = "", selectedProductId = "") {
   const db = getDatabase();
   const { categories, products } = await catalogData(db);
-  const category = categories.includes(selectedCategory) ? selectedCategory : "";
+  const category = categories.includes(selectedCategory) ? selectedCategory : (categories[0] || "");
   const list = category
     ? await products.find(category === "Umum"
       ? { active: true, $or: [{ category: "Umum" }, { category: { $exists: false } }, { category: null }, { category: "" }] }
@@ -666,13 +666,13 @@ async function buildCatalogPayload(selectedCategory = "", selectedProductId = ""
           ? name.replace(/\b(\d+x)\b/g, "`$1`").replace(/\b(\d+)\s+Month\b/gi, "`$1` Month")
           : name;
         lines.push("**" + (safeText(product.emoji,100) ? safeText(product.emoji,100) + " " : "") + displayName + "**");
-        lines.push("<:alur:1553800809198649344> **Harga:** `" + formatPrice(retail).replace(/^Rp\s*/, "Rp") + "`", "");
+        lines.push("<:alur:1558458209977499740> **Harga:** `" + formatPrice(retail).replace(/^Rp\s*/, "Rp") + "`", "");
       }
     }
   }
 
   const panel = buildPanel("");
-  panel.addTextDisplayComponents(new TextDisplayBuilder().setContent("### 🛍️ RAPSTORE — CATALOG"));
+  panel.addTextDisplayComponents(new TextDisplayBuilder().setContent("### <:Catalog:1558470276981850132> RAPSTORE — CATALOG"));
   panel.addSeparatorComponents(new SeparatorBuilder());
   panel.addTextDisplayComponents(new TextDisplayBuilder().setContent(lines.join("\n").slice(0, 3900)));
   panel.addSeparatorComponents(new SeparatorBuilder());
@@ -713,26 +713,29 @@ async function buildCatalogPayload(selectedCategory = "", selectedProductId = ""
     description: "Pilih kategori untuk melihat produk yang tersedia",
   }]).setDisabled(true);
 
-  const ticketMenu = new StringSelectMenuBuilder()
-    .setCustomId("rapstore:catalog:ticket")
-    .setPlaceholder("Pilih Tujuan Tiket")
-    .setMinValues(1).setMaxValues(1)
-    .addOptions([
-      {
-        label: "ORDER SEKARANG",
-        value: selectedProduct ? ("order_now:" + String(selectedProduct._id)) : "order_now",
-        description: "Buat tiket untuk melakukan pemesanan",
-      },
-      {
-        label: "TANYA-TANYA DULU",
-        value: selectedProduct ? ("product_question:" + String(selectedProduct._id)) : "product_question",
-        description: "Buat tiket untuk bertanya sebelum memesan",
-      },
-    ]);
+
 
   panel.addActionRowComponents(new ActionRowBuilder().addComponents(categoryMenu));
   panel.addActionRowComponents(new ActionRowBuilder().addComponents(productMenu));
-  panel.addActionRowComponents(new ActionRowBuilder().addComponents(ticketMenu));
+  const categoryIndex = category ? categories.indexOf(category) : -1;
+  const pageLabel = categories.length ? (Math.max(0, categoryIndex) + 1) + "/" + categories.length : "0/0";
+  panel.addActionRowComponents(new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId("rapstore:catalog:category-page:prev:" + Math.max(0, categoryIndex))
+      .setLabel("PREV")
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(categories.length <= 1),
+    new ButtonBuilder()
+      .setCustomId("rapstore:catalog:category-page:counter:" + Math.max(0, categoryIndex))
+      .setLabel(pageLabel)
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(true),
+    new ButtonBuilder()
+      .setCustomId("rapstore:catalog:category-page:next:" + Math.max(0, categoryIndex))
+      .setLabel("NEXT")
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(categories.length <= 1),
+  ));
   return {
     flags: MessageFlags.IsComponentsV2,
     components: [panel],
@@ -795,38 +798,89 @@ async function handleCatalogSelection(interaction) {
       return;
     }
     const category = safeText(product.category || "Umum", 80);
-    await interaction.editReply(await buildCatalogPayload(category, id));
-    return;
-  }
-
-  if (interaction.customId === "rapstore:catalog:ticket") {
-    await interaction.deferUpdate();
-    const [ticketType, selectedProductId] = String(interaction.values[0] || "").split(":");
-    if (!["order_now", "product_question"].includes(ticketType)) {
+    const unitPrice = Number(product.price);
+    if (!Number.isSafeInteger(unitPrice) || unitPrice < 1) {
       await interaction.followUp(v2Payload({
-        content: "Tujuan tiket tidak valid. Silakan pilih ulang.",
+        content: "Harga produk ini belum valid. Hubungi Founder/Admin agar harga diperbaiki sebelum memesan.",
         flags: EPHEMERAL | MessageFlags.IsComponentsV2,
       }));
       return;
     }
-    let selectedProduct = null;
-    if (selectedProductId) {
-      if (!ObjectId.isValid(selectedProductId)) {
-        await interaction.followUp(v2Payload({
-          content: "Produk tidak valid. Pilih produk dari katalog lalu coba lagi.",
-          flags: EPHEMERAL | MessageFlags.IsComponentsV2,
-        }));
-        return;
-      }
-      selectedProduct = await db.collection("products").findOne({ _id: new ObjectId(selectedProductId), active: true });
-      if (!selectedProduct) {
-        await interaction.followUp(v2Payload({
-          content: "Produk sudah tidak tersedia. Perbarui katalog lalu coba lagi.",
-          flags: EPHEMERAL | MessageFlags.IsComponentsV2,
-        }));
-        return;
-      }
-    }
+    const confirmPanel = buildPanel(
+      "KONFIRMASI PESANAN",
+      "Lu memilih produk **" + safeText(product.name, 100) + "** dengan harga **" + formatPrice(product.price) + "**.\n\nLanjutkan untuk membuat tiket order, atau batalkan jika berubah pikiran.",
+    );
+    confirmPanel.addActionRowComponents(new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId("rapstore:catalog:order:confirm:" + id)
+        .setLabel("Ya, Lanjutkan")
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId("rapstore:catalog:order:cancel:" + id)
+        .setLabel("Batalkan")
+        .setStyle(ButtonStyle.Secondary),
+    ));
+    await interaction.followUp({
+      flags: EPHEMERAL | MessageFlags.IsComponentsV2,
+      components: [confirmPanel],
+      allowedMentions: { parse: [], users: [], roles: [] },
+    });
+    return;
+  }
+
+}
+
+async function handleCatalogPageButton(interaction) {
+  if (!interaction.inGuild()) {
+    await interaction.reply(v2Payload({
+      content: "Navigasi katalog hanya bisa digunakan di server Discord.",
+      flags: EPHEMERAL | MessageFlags.IsComponentsV2,
+    }));
+    return;
+  }
+  const parts = String(interaction.customId || "").split(":");
+  const action = parts[3] || "";
+  const requestedIndex = Number(parts[4]);
+  if (!["prev", "next"].includes(action)) {
+    await interaction.reply(v2Payload({
+      content: "Navigasi kategori tidak valid. Buka ulang katalog lalu coba lagi.",
+      flags: EPHEMERAL | MessageFlags.IsComponentsV2,
+    }));
+    return;
+  }
+  // Acknowledge the component immediately so a slow database query cannot
+  // exceed Discord's interaction response deadline.
+  await interaction.deferUpdate();
+  const { categories } = await catalogData(getDatabase());
+  if (!categories.length) {
+    await interaction.editReply(await buildCatalogPayload());
+    return;
+  }
+  const currentIndex = Number.isInteger(requestedIndex) && requestedIndex >= 0 && requestedIndex < categories.length
+    ? requestedIndex
+    : 0;
+  const delta = action === "prev" ? -1 : 1;
+  const nextIndex = (currentIndex + delta + categories.length) % categories.length;
+  await interaction.editReply(await buildCatalogPayload(categories[nextIndex], ""));
+}
+
+async function createCatalogOrderTicket(interaction, selectedProductId) {
+  const db = getDatabase();
+  if (!ObjectId.isValid(selectedProductId)) {
+    await interaction.editReply(v2Payload({
+      content: "Produk tidak valid atau sudah tidak tersedia. Buka katalog dan pilih produk lagi.",
+      flags: EPHEMERAL | MessageFlags.IsComponentsV2,
+    }));
+    return;
+  }
+  const selectedProduct = await db.collection("products").findOne({ _id: new ObjectId(selectedProductId), active: true });
+  if (!selectedProduct) {
+    await interaction.editReply(v2Payload({
+      content: "Produk sudah tidak tersedia. Buka katalog lalu pilih produk aktif lagi.",
+      flags: EPHEMERAL | MessageFlags.IsComponentsV2,
+    }));
+    return;
+  }
     const reservations = db.collection("ticket_reservations");
     const reservationTime = new Date();
     await reservations.deleteMany({ createdAt: { $lt: new Date(Date.now() - 10 * 60 * 1000) } });
@@ -834,7 +888,7 @@ async function handleCatalogSelection(interaction) {
       await reservations.insertOne({ guildId: interaction.guildId, buyerId: interaction.user.id, interactionId: interaction.id, createdAt: reservationTime });
     } catch (error) {
       if (error?.code === 11000) {
-        await interaction.followUp(v2Payload({
+        await interaction.editReply(v2Payload({
           content: "Permintaan tiket lu sedang diproses. Tunggu sebentar lalu cek daftar tiket sebelum mencoba lagi.",
           flags: EPHEMERAL | MessageFlags.IsComponentsV2,
         }));
@@ -842,14 +896,14 @@ async function handleCatalogSelection(interaction) {
       }
       throw error;
     }
-    let progressMessage = null;
+    let progressMessage = interaction.message || null;
     const reportProgress = async (title, body) => {
       const payload = { flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral, components: [buildPanel(title, body)] };
-      if (progressMessage) await interaction.webhook.editMessage(progressMessage.id, payload);
+      if (progressMessage) await interaction.editReply(payload);
       else progressMessage = await interaction.followUp({ ...payload, fetchReply: true });
     };
     try {
-      await reportProgress("TIKET SEDANG DIBUAT", "Permintaan lu sedang diproses. Tunggu sebentar ya — jangan klik dropdown berulang kali.");
+      await reportProgress("TIKET SEDANG DIBUAT", "Permintaan lu sedang diproses. Tunggu sebentar ya — jangan tekan tombol konfirmasi berulang kali.");
       const activeTickets = await db.collection("tickets").find({ guildId: interaction.guildId, buyerId: interaction.user.id, status: "open" }).toArray();
       let existing = null;
       for (const activeTicket of activeTickets) {
@@ -868,8 +922,8 @@ async function handleCatalogSelection(interaction) {
         await reportProgress("TIKET SUDAH ADA", "Lu sudah punya tiket yang masih terbuka: <#" + existing.channelId + ">. Selesaikan tiket itu sebelum membuat tiket baru.");
         return;
       }
-      const isOrder = ticketType === "order_now";
-      const ticketNumber = await allocateTicketNumber(isOrder ? "order" : "question");
+      const ticketType = "order_now";
+      const ticketNumber = await allocateTicketNumber("order");
       const ticketCode = await allocateTicketCode();
       const channel = await interaction.guild.channels.create({
         name: ticketNumber.channelName, type: ChannelType.GuildText, parent: config.ids.supportCategory || undefined,
@@ -885,19 +939,11 @@ async function handleCatalogSelection(interaction) {
       try {
         const ticketInsert = await db.collection("tickets").insertOne({
           guildId: interaction.guildId, buyerId: interaction.user.id, channelId: channel.id, type: ticketType,
-          ticketNumber: ticketNumber.number, ticketPrefix: isOrder ? "rap" : "tanya", ticketCode,
+          ticketNumber: ticketNumber.number, ticketPrefix: "rap", ticketCode,
           productId: selectedProduct ? String(selectedProduct._id) : null, productName: selectedProduct ? safeText(selectedProduct.name, 100) : null,
           status: "open", createdAt: new Date(),
         });
-        if (isOrder) {
-          await initializeOrderTicket({ channel, interaction, ticketId: ticketInsert.insertedId, ticketCode, selectedProduct });
-        } else {
-          const productLine = selectedProduct ? "\nProduk yang dipilih: **" + safeText(selectedProduct.name, 100) + "**" : "\nProduk belum dipilih dari katalog.";
-          const intro = "Halo <@" + interaction.user.id + ">! Silakan tulis pertanyaan produk lu di sini.";
-          const ticketWelcome = buildPanel("RAPSTORE — TANYA-TANYA DULU", intro + productLine + "\n\nJangan kirim password atau data sensitif.");
-          ticketWelcome.addActionRowComponents(new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId("rapstore:ticket:close").setLabel("Tutup Tiket").setStyle(ButtonStyle.Danger)));
-          await channel.send({ flags: MessageFlags.IsComponentsV2, components: [ticketWelcome] });
-        }
+        await initializeOrderTicket({ channel, interaction, ticketId: ticketInsert.insertedId, ticketCode, selectedProduct });
       } catch (error) {
         await db.collection("tickets").deleteOne({ channelId: channel.id }).catch(error => logError("ticket-create-rollback", error));
         await db.collection("orders").deleteMany({ channelId: channel.id, status: "ON HOLD" })
@@ -913,8 +959,9 @@ async function handleCatalogSelection(interaction) {
     } finally {
       await reservations.deleteOne({ guildId: interaction.guildId, buyerId: interaction.user.id, interactionId: interaction.id }).catch(error => logError("ticket-reservation-release", error));
     }
-  }
 }
+
+
 function formatPrice(value) {
   return "Rp " + Number(value || 0).toLocaleString("id-ID");
 }
@@ -997,10 +1044,43 @@ async function handleTicketButton(interaction) {
   }
 }
 
+async function handleCatalogOrderButton(interaction) {
+  if (!interaction.inGuild()) {
+    await interaction.reply(v2Payload({
+      content: "Konfirmasi order hanya bisa digunakan di server Discord.",
+      flags: EPHEMERAL | MessageFlags.IsComponentsV2,
+    }));
+    return;
+  }
+  const parts = String(interaction.customId || "").split(":");
+  const action = parts[3] || "";
+  const productId = parts[4] || "";
+  if (action === "cancel") {
+    await interaction.deferUpdate();
+    await interaction.deleteReply();
+    return;
+  }
+  if (action !== "confirm" || !productId) {
+    await interaction.reply(v2Payload({
+      content: "Konfirmasi tidak valid. Pilih produk dari katalog lalu coba lagi.",
+      flags: EPHEMERAL | MessageFlags.IsComponentsV2,
+    }));
+    return;
+  }
+  await interaction.deferUpdate();
+  await createCatalogOrderTicket(interaction, productId);
+}
+
 async function handleInteraction(interaction) {
   if ((interaction.isButton() || interaction.isStringSelectMenu() || interaction.isModalSubmit()) &&
       (interaction.customId.startsWith("rapstore:order:") || interaction.customId.startsWith("rapstore:payment:") || interaction.customId.startsWith("rapstore:vouch:"))) {
     await handleOrderInteraction(interaction, client); return;
+  }
+  if (interaction.isButton() && interaction.customId.startsWith("rapstore:catalog:category-page:")) {
+    await handleCatalogPageButton(interaction); return;
+  }
+  if (interaction.isButton() && interaction.customId.startsWith("rapstore:catalog:order:")) {
+    await handleCatalogOrderButton(interaction); return;
   }
   if (interaction.isButton() && interaction.customId.startsWith("rapstore:ticket:")) {
     await handleTicketButton(interaction); return;
