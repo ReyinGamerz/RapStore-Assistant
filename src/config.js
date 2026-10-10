@@ -31,10 +31,11 @@ export const config = {
   vouchChannelId: optionalId("VOUCH_CHANNEL_ID"),
   transcriptChannelId: optionalId("TRANSCRIPT_CHANNEL_ID"),
   cloudStorage: {
-    r2AccountId: optionalId("R2_ACCOUNT_ID"),
-    r2AccessKeyId: optionalId("R2_ACCESS_KEY_ID"),
-    r2SecretAccessKey: optionalId("R2_SECRET_ACCESS_KEY"),
-    r2BucketName: optionalId("R2_BUCKET_NAME"),
-    r2PublicBaseUrl: optionalId("R2_PUBLIC_BASE_URL").replace(new RegExp(String.fromCharCode(47) + "$"), ""),
+    b2S3Endpoint: optionalId("B2_S3_ENDPOINT"),
+    b2Region: optionalId("B2_REGION"),
+    b2AccessKeyId: optionalId("B2_ACCESS_KEY_ID"),
+    b2SecretAccessKey: optionalId("B2_SECRET_ACCESS_KEY"),
+    b2BucketName: optionalId("B2_BUCKET_NAME"),
+    b2PublicBaseUrl: optionalId("B2_PUBLIC_BASE_URL").replace(new RegExp(String.fromCharCode(47) + "$"), ""),
   },
 };
