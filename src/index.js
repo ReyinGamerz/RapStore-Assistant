@@ -78,7 +78,6 @@ function buildProductModal(action, category, product = null, allowNewCategory = 
     ["emoji_produk","Emoji produk (opsional)",TextInputStyle.Short,false,100,product?.emoji || ""],
   ];
   if (allowNewCategory) specs.push(["kategori","Kategori baru",TextInputStyle.Short,true,80,product?.category || "Umum"]);
-  specs.push(["emoji_kategori","Emoji kategori (opsional)",TextInputStyle.Short,false,100,product?.categoryEmoji || ""]);
   specs.push(["deskripsi","Deskripsi",TextInputStyle.Paragraph,false,500,product?.description || ""]);
   for (const [id,label,style,required,max,value] of specs) {
     const input = new TextInputBuilder().setCustomId(id).setLabel(label).setStyle(style).setRequired(required).setMaxLength(max);
@@ -191,16 +190,17 @@ async function handleFounderPanelModal(interaction) {
   const category=safeText(categoryField ? interaction.fields.getTextInputValue("kategori") : decodeCategory(categoryToken)||"Umum",80)||"Umum";
   const description=safeText(interaction.fields.getTextInputValue("deskripsi")||"",500);
   const emoji=safeText(interaction.fields.getTextInputValue("emoji_produk")||"",100);
-  const categoryEmoji=safeText(interaction.fields.getTextInputValue("emoji_kategori")||"",100);
+  const categoryEmojiField=interaction.fields.fields?.get("emoji_kategori");
+  const categoryEmoji=categoryEmojiField?safeText(interaction.fields.getTextInputValue("emoji_kategori")||"",100):undefined;
   if(!name||!Number.isSafeInteger(price)||price<1||!category){await interaction.reply(v2Payload({content:"Nama, kategori, dan harga wajib valid. Harga harus berupa angka positif.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;}
   if(action==="add"){
-    const now=new Date();const result=await db.collection("products").insertOne({name,price,category,emoji,categoryEmoji,description,active:true,currency:"IDR",createdAt:now,updatedAt:now,createdBy:interaction.user.id});
+    const now=new Date();const result=await db.collection("products").insertOne({name,price,category,emoji,description,active:true,currency:"IDR",createdAt:now,updatedAt:now,createdBy:interaction.user.id});
     await audit("product.created",interaction,{productId:String(result.insertedId),source:"panel"});
     await interaction.reply(v2Payload({content:"Produk berhasil dibuat dalam kategori **"+category+"**. ID: "+result.insertedId,flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;
   }
   const id=parts[3];const {ObjectId}=await import("mongodb");
   if(!ObjectId.isValid(id)){await interaction.reply(v2Payload({content:"ID produk tidak valid.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;}
-  const result=await db.collection("products").updateOne({_id:new ObjectId(id)},{$set:{name,price,category,emoji,categoryEmoji,description,updatedAt:new Date(),updatedBy:interaction.user.id}});
+  const result=await db.collection("products").updateOne({_id:new ObjectId(id)},{$set:{name,price,category,emoji,description,updatedAt:new Date(),updatedBy:interaction.user.id}});
   if(!result.matchedCount){await interaction.reply(v2Payload({content:"Produk tidak ditemukan.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;}
   await audit("product.updated",interaction,{productId:id,source:"panel"});
   await interaction.reply(v2Payload({content:"Produk berhasil diperbarui.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
