@@ -667,6 +667,49 @@ async function refreshOrderMessage(order, client) {
   await refreshPaymentStatusMessage(order, client);
   await refreshOrderLog(order, client).catch(error => console.error("[order-log]", error?.message || error));
 }
+async function cancelActiveOrdersForTicket({ guildId, channelId, actorId, client, reason }) {
+  const db = getDatabase();
+  const activeOrders = await db.collection("orders").find({
+    guildId,
+    channelId,
+    status: { $in: ["ON HOLD", "PROSES"] },
+  }).toArray();
+  let cancelled = 0;
+
+  for (const candidate of activeOrders) {
+    const now = new Date();
+    const result = await db.collection("orders").updateOne(
+      { _id: candidate._id, status: { $in: ["ON HOLD", "PROSES"] } },
+      {
+        $set: {
+          status: "CANCELLED",
+          paymentStatus: "cancelled",
+          cancelledAt: now,
+          cancelledBy: actorId,
+          cancelReason: reason,
+          updatedAt: now,
+        },
+      },
+    );
+    if (!result.modifiedCount) continue;
+    cancelled++;
+
+    const updated = await db.collection("orders").findOne({ _id: candidate._id });
+    await refreshOrderMessage(updated, client).catch(error =>
+      console.error("[ticket-close-order-refresh]", error?.message || error));
+    await supersedePendingProofs(db, client, candidate._id, null, "ticket_closed_" + reason);
+    await db.collection("audit_logs").insertOne({
+      action: "order.cancelled",
+      actorId,
+      guildId,
+      details: { orderId: String(candidate._id), orderCode: candidate.orderCode, channelId, reason },
+      createdAt: now,
+    }).catch(() => {});
+  }
+
+  return { cancelled, activeOrders };
+}
+
 function buildDonePanel(order, vouchSubmitted = false) {
   const panel = buildPanel("PESANAN SELESAI",
     "Pesanan **" + clean(order.orderCode, 40) + "** sudah berstatus **DONE**.\n" +
@@ -1758,10 +1801,7 @@ export async function handleOrderInteraction(interaction, client) {
       await interaction.update(v2(buildPanel("PESANAN SUDAH DIPROSES", "Status pesanan sudah berubah.")));
       return;
     }
-    await db.collection("payment_proofs").updateMany(
-      { orderId: String(order._id), status: "pending" },
-      { $set: { status: "superseded", supersededAt: new Date(), supersededReason: "order_cancelled", updatedAt: new Date() }, $unset: { reviewSendingAt: "" } },
-    ).catch(error => console.error("[payment-proof-cancel]", error?.message || error));
+    await supersedePendingProofs(db, client, order._id, null, "order_cancelled");
     const updated = await db.collection("orders").findOne({ _id: order._id });
     await refreshPaymentStatusMessage(updated, client);
     await refreshOrderLog(updated, client).catch(error => console.error("[order-log]", error?.message || error));
@@ -1965,40 +2005,18 @@ export async function handleOrderMessage(message, client) {
       await message.channel.send(v2(buildPanel("TIKET TIDAK DITEMUKAN", "Command !close hanya berlaku di tiket yang masih terbuka."))).catch(() => {});
       return;
     }
-    // Explicit !close aborts an unfinished order so it cannot remain payable/processable after its ticket disappears.
-    const activeOrders = await db.collection("orders").find({
+    // Explicit !close aborts unfinished orders and synchronizes every related UI/proof record.
+    const { cancelled, activeOrders } = await cancelActiveOrdersForTicket({
       guildId: message.guild.id,
       channelId: message.channel.id,
-      status: { $in: ["ON HOLD", "PROSES"] },
-    }).toArray();
-    if (activeOrders.length) {
-      const orderIds = activeOrders.map(order => String(order._id));
-      await db.collection("orders").updateMany({
-        _id: { $in: activeOrders.map(order => order._id) },
-        status: { $in: ["ON HOLD", "PROSES"] },
-      }, {
-        $set: {
-          status: "CANCELLED",
-          paymentStatus: "cancelled",
-          cancelledAt: new Date(),
-          cancelledBy: message.author.id,
-          cancelReason: "manual_ticket_close_command",
-          updatedAt: new Date(),
-        },
-      });
-      for (const activeOrder of activeOrders) {
-        const cancelledOrder = await db.collection("orders").findOne({ _id: activeOrder._id });
-        await refreshOrderLog(cancelledOrder, client).catch(error => console.error("[order-log]", error?.message || error));
-      }
-      await db.collection("payment_proofs").updateMany({
-        orderId: { $in: orderIds },
-        status: "pending",
-      }, {
-        $set: { status: "superseded", updatedAt: new Date(), supersededReason: "ticket_closed_manually" },
-      });
+      actorId: message.author.id,
+      client,
+      reason: "manual_ticket_close_command",
+    });
+    if (cancelled > 0 || activeOrders.length > 0) {
       await message.channel.send(v2(buildPanel(
         "PESANAN DIBATALKAN",
-        "Founder/Admin menutup tiket dengan !close. Pesanan yang belum selesai dibatalkan dan bukti pembayaran yang menunggu pemeriksaan dinonaktifkan. Transcript akan disimpan sebelum channel dihapus."
+        "Founder/Admin menutup tiket dengan !close. Pesanan aktif dibatalkan, panel pembayaran diperbarui, dan tombol review bukti yang masih menunggu dinonaktifkan. Transcript akan disimpan sebelum channel dihapus."
       ))).catch(() => {});
     }
     try {
