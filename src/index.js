@@ -863,7 +863,6 @@ async function createCatalogOrderTicket(interaction, selectedProductId) {
         return;
       }
       const ticketType = "order_now";
-      const isOrder = true;
       const ticketNumber = await allocateTicketNumber("order");
       const ticketCode = await allocateTicketCode();
       const channel = await interaction.guild.channels.create({
@@ -880,7 +879,7 @@ async function createCatalogOrderTicket(interaction, selectedProductId) {
       try {
         const ticketInsert = await db.collection("tickets").insertOne({
           guildId: interaction.guildId, buyerId: interaction.user.id, channelId: channel.id, type: ticketType,
-          ticketNumber: ticketNumber.number, ticketPrefix: isOrder ? "rap" : "tanya", ticketCode,
+          ticketNumber: ticketNumber.number, ticketPrefix: "rap", ticketCode,
           productId: selectedProduct ? String(selectedProduct._id) : null, productName: selectedProduct ? safeText(selectedProduct.name, 100) : null,
           status: "open", createdAt: new Date(),
         });
