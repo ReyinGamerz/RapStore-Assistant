@@ -350,6 +350,11 @@ export async function archiveAndDeleteTicket({ channel, ticket, client, closedBy
       transcriptFileName: filename, transcriptChannelId: archiveChannel.id, transcriptMessageId: archivedMessage.id,
     } },
   );
+  if (ticket.buyerId && channel.permissionOverwrites?.edit) {
+    await channel.permissionOverwrites.edit(ticket.buyerId, { ViewChannel: false, SendMessages: false }).catch(error => {
+      console.error("[ticket-archive-lock]", error?.message || error);
+    });
+  }
   await channel.delete("RapStore ticket archived as " + filename);
   return { filename, messageId: archivedMessage.id, messageCount: messages.length };
 }
@@ -430,6 +435,17 @@ async function runOrderMaintenance(client) {
   try {
     const db = getDatabase();
     await publishPendingVouches(client);
+    const alreadyArchived = await db.collection("tickets").find({
+      status: "closed", transcriptFileName: { $exists: true }, channelId: { $exists: true },
+    }).limit(50).toArray();
+    for (const ticket of alreadyArchived) {
+      const guild = await client.guilds.fetch(ticket.guildId).catch(() => null);
+      const channel = guild ? await guild.channels.fetch(ticket.channelId).catch(() => null) : null;
+      if (channel) {
+        await channel.delete("RapStore ticket already archived as " + ticket.transcriptFileName)
+          .catch(error => console.error("[ticket-delete-retry]", ticket.channelId, error?.message || error));
+      }
+    }
     const now = new Date();
     const dueOrders = await db.collection("orders").find({
       status: "DONE", autoCloseAt: { $lte: now }, ticketClosedAt: { $exists: false },
@@ -462,8 +478,10 @@ async function runOrderMaintenance(client) {
         const guild = await client.guilds.fetch(candidate.guildId).catch(() => null);
         const channel = guild ? await guild.channels.fetch(candidate.channelId).catch(() => null) : null;
         const ticket = await db.collection("tickets").findOne({ guildId: candidate.guildId, channelId: candidate.channelId });
-        if (channel && ticket && ticket.status !== "closed") {
+        if (channel && ticket && (ticket.status !== "closed" || !ticket.transcriptFileName)) {
           await archiveAndDeleteTicket({ channel, ticket, client, closedBy: "system", reason: "order_done_auto_close" });
+        } else if (channel && ticket?.status === "closed" && ticket.transcriptFileName) {
+          await channel.delete("RapStore ticket already archived as " + ticket.transcriptFileName);
         } else if (!channel && ticket && ticket.status === "open") {
           await db.collection("tickets").updateOne({ _id: ticket._id, status: "open" }, {
             $set: { status: "deleted", closedAt: new Date(), closeReason: "channel_missing_before_auto_close" },
