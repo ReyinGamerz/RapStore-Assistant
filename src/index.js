@@ -189,64 +189,53 @@ async function catalogData(db) {
   return { categories: normalized, products };
 }
 
-async function renderCatalogPanel(interaction, selectedCategory = "", selectedProductId = "") {
+async function renderCatalogPanel(interaction, selectedCategory = "") {
   const db = getDatabase();
   const { categories, products } = await catalogData(db);
-  if (!categories.length) {
-    const empty = buildPanel("🛍️ RAPSTORE - CATALOG", "Katalog belum memiliki produk aktif. Staff bisa menambahkan produk terlebih dahulu.");
-    await interaction.editReply({ flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral, components: [empty] });
-    return;
-  }
-
   const category = categories.includes(selectedCategory) ? selectedCategory : "";
-  const filter = category
-    ? (category === "Umum"
+  const list = category
+    ? await products.find(category === "Umum"
       ? { active: true, $or: [{ category: "Umum" }, { category: { $exists: false } }, { category: null }, { category: "" }] }
-      : { active: true, category })
-    : { active: true };
-  const list = await products.find(filter).sort({ name: 1 }).limit(25).toArray();
-  let selectedProduct = null;
-  if (selectedProductId) {
-    const { ObjectId } = await import("mongodb");
-    if (ObjectId.isValid(selectedProductId)) {
-      selectedProduct = list.find(p => String(p._id) === selectedProductId)
-        || await products.findOne({ _id: new ObjectId(selectedProductId), active: true });
-    }
-  }
+      : { active: true, category }).sort({ name: 1 }).limit(25).toArray()
+    : [];
 
-  const lines = ["**Kategori:** " + (category || "Semua kategori")];
-  if (selectedProduct) {
-    const stock = await db.collection("stock_items").countDocuments({ productId: String(selectedProduct._id), status: "available" });
-    const retail = Number(selectedProduct.price || 0);
-    const reseller = Number.isSafeInteger(selectedProduct.resellerPrice) && selectedProduct.resellerPrice > 0 ? selectedProduct.resellerPrice : retail;
-    lines.push("### " + safeText(selectedProduct.name, 100));
-    if (selectedProduct.description) lines.push(safeText(selectedProduct.description, 500));
-    lines.push("Retail: **" + formatPrice(retail) + "**　 Reseller: **" + formatPrice(reseller) + "**");
-    lines.push("Stok: " + (stock > 0 ? "🟢 Tersedia" : "🔴 Habis") + " (" + stock + ")");
-    lines.push("Harga reseller berlaku otomatis berdasarkan role Discord.");
+  const lines = [];
+  if (!category) {
+    lines.push("Silakan pilih kategori dan produk menggunakan menu di bawah.");
+    lines.push("Daftar produk akan muncul setelah kategori dipilih.");
   } else if (!list.length) {
+    lines.push("**Kategori:** " + category);
     lines.push("Belum ada produk aktif di kategori ini.");
   } else {
+    lines.push("**Kategori:** " + category);
     for (const product of list) {
-      const stock = await db.collection("stock_items").countDocuments({ productId: String(product._id), status: "available" });
       const retail = Number(product.price || 0);
       const reseller = Number.isSafeInteger(product.resellerPrice) && product.resellerPrice > 0 ? product.resellerPrice : retail;
-      lines.push("### " + safeText(product.name, 100));
-      if (product.description) lines.push(safeText(product.description, 250));
-      lines.push("Retail: **" + formatPrice(retail) + "**　 Reseller: **" + formatPrice(reseller) + "**");
-      lines.push("Stok: " + (stock > 0 ? "🟢 Tersedia" : "🔴 Habis") + " (" + stock + ")");
+      const name = safeText(product.name, 100);
+      const isServerBoost = /server\\s*boost/i.test(name) || /server\\s*boost/i.test(safeText(product.category || "", 80));
+      if (isServerBoost) {
+        lines.push("### " + name);
+        lines.push("Harga: " + formatPrice(retail) + " | Reseller " + formatPrice(reseller));
+      } else {
+        lines.push("### " + name);
+        lines.push("**Harga:** " + formatPrice(retail) + " | **Reseller:** " + formatPrice(reseller));
+      }
     }
   }
 
   const panel = buildPanel("🛍️ RAPSTORE - CATALOG");
   panel.addSeparatorComponents(new SeparatorBuilder());
-  panel.addTextDisplayComponents(new TextDisplayBuilder().setContent(lines.join("\n").slice(0, 3900)));
+  panel.addTextDisplayComponents(new TextDisplayBuilder().setContent(lines.join("\\n").slice(0, 3900)));
   panel.addSeparatorComponents(new SeparatorBuilder());
 
   const categoryMenu = new StringSelectMenuBuilder()
     .setCustomId("rapstore:catalog:category").setPlaceholder("Pilih Kategori")
     .setMinValues(1).setMaxValues(1)
-    .addOptions(categories.slice(0, 25).map(c => ({ label: c.slice(0, 100), value: c, description: "Tampilkan produk kategori ini" })));
+    .addOptions((categories.length ? categories : ["Belum ada kategori"]).slice(0, 25).map(c => ({
+      label: c.slice(0, 100), value: c, description: "Tampilkan produk kategori ini",
+    })));
+  if (!categories.length) categoryMenu.setDisabled(true);
+
   const productMenu = new StringSelectMenuBuilder()
     .setCustomId("rapstore:catalog:product").setPlaceholder("Pilih Produk")
     .setMinValues(1).setMaxValues(1);
@@ -255,7 +244,7 @@ async function renderCatalogPanel(interaction, selectedCategory = "", selectedPr
     description: (formatPrice(p.price) + " • " + safeText(p.category || "Umum", 30)).slice(0, 100),
   }));
   if (productOptions.length) productMenu.addOptions(productOptions);
-  else productMenu.addOptions([{ label: "Belum ada produk", value: "none", description: "Kategori ini belum memiliki produk" }]).setDisabled(true);
+  else productMenu.addOptions([{ label: category ? "Tidak ada produk" : "Pilih kategori dulu", value: "none", description: "Pilih kategori sebelum memilih produk" }]).setDisabled(true);
 
   const ticketMenu = new StringSelectMenuBuilder()
     .setCustomId("rapstore:catalog:ticket").setPlaceholder("Pilih Tujuan Tiket")
@@ -272,17 +261,28 @@ async function handleCatalogSelection(interaction) {
   await interaction.deferUpdate();
   const db = getDatabase();
   if (interaction.customId === "rapstore:catalog:category") {
-    await renderCatalogPanel(interaction, safeText(interaction.values[0], 80));
+    const selected = safeText(interaction.values[0], 80);
+    await renderCatalogPanel(interaction, selected);
     return;
   }
   if (interaction.customId === "rapstore:catalog:product") {
     const id = interaction.values[0];
-    if (id === "none") return;
+    if (id === "none") {
+      await interaction.followUp(v2Payload({ content: "Pilih kategori terlebih dahulu, lalu pilih produk.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
+      return;
+    }
     const { ObjectId } = await import("mongodb");
-    if (!ObjectId.isValid(id)) return void await renderCatalogPanel(interaction);
+    if (!ObjectId.isValid(id)) {
+      await interaction.followUp(v2Payload({ content: "Produk tidak valid. Silakan pilih ulang.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
+      return;
+    }
     const product = await db.collection("products").findOne({ _id: new ObjectId(id), active: true });
-    if (!product) return void await renderCatalogPanel(interaction);
-    await renderCatalogPanel(interaction, safeText(product.category || "Umum", 80), id);
+    if (!product) {
+      await interaction.followUp(v2Payload({ content: "Produk tidak ditemukan atau sudah tidak aktif. Silakan pilih ulang.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
+      return;
+    }
+    // Selecting a product is a selection-only step: keep the catalog display unchanged.
+    await interaction.followUp(v2Payload({ content: "✓ Produk dipilih: **" + safeText(product.name, 100) + "**. Sekarang pilih tujuan tiket di dropdown terakhir.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
     return;
   }
   if (interaction.customId === "rapstore:catalog:ticket") {
@@ -310,7 +310,7 @@ async function handleCatalogSelection(interaction) {
     });
     try {
       await db.collection("tickets").insertOne({ guildId: interaction.guildId, buyerId: interaction.user.id, channelId: channel.id, type: "product_question", status: "open", createdAt: new Date() });
-      await channel.send(v2SendPayload("**RAPSTORE — TANYA PRODUK**\nHalo <@" + interaction.user.id + ">! Silakan tulis pertanyaan produk lu di sini. Admin/Founder akan membantu.\n\nJangan kirim password atau data sensitif."));
+      await channel.send(v2SendPayload("**RAPSTORE — TANYA PRODUK**\\nHalo <@" + interaction.user.id + ">! Silakan tulis pertanyaan produk lu di sini. Admin/Founder akan membantu.\\n\\nJangan kirim password atau data sensitif."));
       await interaction.followUp(v2Payload({ content: "✓ Tiket pertanyaan produk berhasil dibuat: <#" + channel.id + ">.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
     } catch (error) {
       await channel.delete("Failed to initialize product question ticket").catch(() => {});
