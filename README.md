@@ -1,39 +1,37 @@
 # RapStore Assistant — Catalog Only
 
-Discord catalog bot built with discord.js v14, MongoDB Atlas, and Discord Components V2. The current scope is intentionally limited to browsing products and managing catalog entries.
+Discord catalog bot built with discord.js v14, MongoDB Atlas, and Discord Components V2. Current scope: catalog browsing and product management only.
 
 ## Requirements
 - Node.js 20.18+
-- Discord application/bot token and client ID
-- MongoDB Atlas URI and database
+- Discord bot token and application client ID
+- MongoDB Atlas URI
 
-## Install on Termux or Linux VPS
+## Install / update on Termux
+For an existing checkout:
 ```bash
-git clone https://github.com/ReyinGamerz/RapStore-Assistant.git
-cd RapStore-Assistant
-npm install
-cp .env.example .env
-nano .env
+cd ~/RapStore-Assistant
+git pull
 npm run check
 npm start
 ```
 
-Set `DISCORD_TOKEN`, `DISCORD_CLIENT_ID`, and `MONGODB_URI` in `.env`. Never commit `.env` or share its contents. The bot refreshes global slash commands at startup; Discord may take some time to reflect removals.
+For a new install, run `npm install`, copy `.env.example` to `.env`, then set `DISCORD_TOKEN`, `DISCORD_CLIENT_ID`, and `MONGODB_URI`. Never commit or share `.env`. Global slash command changes can take time to appear in Discord.
 
 ## Active commands
-- `/catalog` — private, interactive catalog. Select a category, browse its products, and choose a product. Each user's catalog interaction is separate.
-- `/panel` — private Founder/Admin panel to add products, edit product details and prices, and view the product list.
+- `/catalog` — private interactive catalog, separated per user.
+- `/panel` — private Founder/Admin panel with add product, edit product, and product list.
 
-## Catalog behavior
-- Catalog messages use Components V2, not classic embeds.
-- Product data comes from the `products` collection in MongoDB.
-- Only active products appear.
-- Category, product, and ticket-purpose menus are kept in the catalog.
-- `ORDER SEKARANG` and `TANYA-TANYA DULU` currently create private ticket channels. This is a temporary ticket flow; full order/payment processing is not part of this catalog-focused version.
-- Keep product names in the database in the intended display format, e.g. `Server Boost 2x 1 Month`.
+## Catalog display
+- Header: `### 🛍️ RAPSTORE — CATALOG`
+- Category label: `**Category:** Umum`
+- Product names and prices are rendered in bold; Server Boost multipliers and month count are formatted with separate backticks.
+- Descriptions and reseller pricing are not shown.
+- Products come from the MongoDB `products` collection and only active products are displayed. Add or edit the intended products in `/panel`, e.g. `Server Boost 2x 1 Month`, `Server Boost 4x 1 Month`, and `Server Boost 6x 1 Month`, with the correct prices and category.
+- The category, product, and ticket-purpose menus remain below the list. `ORDER SEKARANG` and `TANYA-TANYA DULU` remain temporarily.
 
-## Not included in this phase
-Standalone commands and workflows for order creation, stock entry, payment proof/review, delivery, ticket closing, vouch, store info, and ping have been removed from active slash-command registration. The product panel currently focuses on catalog management; inventory/order fulfillment will be considered later if needed.
+## Out of scope
+Standalone order, stock, payment, delivery, ticket-close, vouch, store-info, and ping commands are not active. Reseller pricing and stock management have been removed from the panel.
 
 ## Security
-Keep the bot token and MongoDB URI private. Configure MongoDB Atlas network access narrowly. Use the Founder/Admin role IDs intended for your server.
+Keep the bot token and MongoDB URI private. Configure MongoDB Atlas network access narrowly. Use the intended Founder/Admin role IDs for your server.
