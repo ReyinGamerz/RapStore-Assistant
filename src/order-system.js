@@ -306,57 +306,127 @@ function transcriptSuffix() {
 
 export async function archiveAndDeleteTicket({ channel, ticket, client, closedBy = null, reason = "ticket_closed" }) {
   if (!channel || !ticket) throw new Error("Ticket channel and database record are required to archive.");
+  const tickets = getDatabase().collection("tickets");
   const archiveId = clean(config.transcriptChannelId, 30);
   if (!archiveId) throw new Error("TRANSCRIPT_CHANNEL_ID is not configured; ticket deletion is blocked to prevent transcript loss.");
-  const archiveChannel = await client.channels.fetch(archiveId).catch(() => null);
+  const archiveChannel = await client.channels.fetch(archiveId).catch(error => {
+    console.error("[ticket-archive-channel-fetch]", error?.message || error);
+    return null;
+  });
   if (!archiveChannel || typeof archiveChannel.send !== "function") throw new Error("TRANSCRIPT_CHANNEL_ID is not a sendable channel.");
 
-  const messages = [];
-  let before;
-  while (true) {
-    const batch = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
-    if (!batch.size) break;
-    messages.push(...batch.values());
-    before = batch.last().id;
-    if (batch.size < 100) break;
-  }
-  messages.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
-  const rows = messages.map(message => {
-    const author = message.author?.tag || message.author?.username || "Unknown";
-    const text = [message.content, ...componentTranscriptText(message.components)].filter(Boolean).join("\n\n");
-    const attachments = [...(message.attachments?.values?.() || [])].map(file =>
-      '<li><a href="' + escapeHtml(file.url) + '">' + escapeHtml(file.name || "attachment") + '</a></li>'
-    ).join("");
-    const body = text ? '<pre>' + escapeHtml(text) + '</pre>' : "";
-    return '<article><header><strong>' + escapeHtml(author) + '</strong> <time>' +
-      escapeHtml(new Date(message.createdTimestamp).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })) +
-      '</time></header>' + body + (attachments ? '<ul>' + attachments + '</ul>' : "") + '</article>';
-  }).join("\n");
-  const html = '<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>RapStore Ticket Transcript</title><style>body{font:14px system-ui,sans-serif;background:#111827;color:#e5e7eb;margin:0;padding:24px}h1{font-size:22px}p{color:#9ca3af}article{background:#1f2937;border-radius:8px;padding:14px;margin:12px 0;overflow-wrap:anywhere}header{display:flex;gap:12px;justify-content:space-between;border-bottom:1px solid #374151;padding-bottom:8px}time{color:#9ca3af;font-size:12px}pre{white-space:pre-wrap;font:inherit;margin:12px 0}a{color:#93c5fd}</style></head><body><h1>RapStore — Ticket Transcript</h1><p>Channel: ' +
-    escapeHtml(channel.name) + ' • Ticket: ' + escapeHtml(ticket.ticketPrefix ? ticket.ticketPrefix + "-" + ticket.ticketNumber : channel.name) +
-    ' • Closed by: ' + escapeHtml(closedBy || "system") + ' • Reason: ' + escapeHtml(reason) + '</p>' + rows + '</body></html>';
-  const baseName = clean(ticket.ticketPrefix && Number.isInteger(ticket.ticketNumber)
-    ? ticket.ticketPrefix + "-" + ticket.ticketNumber : channel.name.replace(/^closed-/, ""), 80).replace(/[^a-zA-Z0-9_-]/g, "-");
-  const filename = baseName + "-#" + transcriptSuffix() + ".html";
-  const archivedMessage = await archiveChannel.send({
-    content: "Transcript tiket **" + baseName + "** • " + messages.length + " pesan • ditutup oleh " + (closedBy ? "<@" + closedBy + ">" : "sistem") + ".",
-    files: [new AttachmentBuilder(Buffer.from(html, "utf8"), { name: filename })],
-    allowedMentions: { parse: [], users: [], roles: [] },
+  const now = new Date();
+  const staleBefore = new Date(now.getTime() - 5 * 60 * 1000);
+  const archiveKey = "rapstore-ticket-" + String(ticket._id);
+  const effectiveClosedBy = closedBy || ticket.archiveClosedBy || null;
+  const effectiveReason = reason || ticket.closeReason || "ticket_closed";
+
+  // Claim the ticket atomically so maintenance and manual commands cannot archive it concurrently.
+  const claim = await tickets.updateOne({
+    _id: ticket._id,
+    status: { $in: ["open", "closing"] },
+    $or: [
+      { archiveProcessingAt: { $exists: false } },
+      { archiveProcessingAt: { $lt: staleBefore } },
+    ],
+  }, {
+    $set: {
+      status: "closing",
+      archiveProcessingAt: now,
+      archiveKey,
+      archiveClosedBy: effectiveClosedBy,
+      closeReason: effectiveReason,
+    },
   });
-  await getDatabase().collection("tickets").updateOne(
-    { _id: ticket._id, status: { $in: ["open", "closing"] } },
-    { $set: {
-      status: "closed", closedAt: new Date(), closedBy, closeReason: reason,
-      transcriptFileName: filename, transcriptChannelId: archiveChannel.id, transcriptMessageId: archivedMessage.id,
-    } },
-  );
-  if (ticket.buyerId && channel.permissionOverwrites?.edit) {
-    await channel.permissionOverwrites.edit(ticket.buyerId, { ViewChannel: false, SendMessages: false }).catch(error => {
-      console.error("[ticket-archive-lock]", error?.message || error);
-    });
+  if (!claim.modifiedCount) {
+    const latest = await tickets.findOne({ _id: ticket._id });
+    if (latest?.status === "closed" && latest.transcriptFileName) {
+      await channel.delete("RapStore ticket already archived as " + latest.transcriptFileName).catch(error => {
+        if (Number(error?.code) !== 10003) throw error;
+      });
+      return { filename: latest.transcriptFileName, messageId: latest.transcriptMessageId, alreadyArchived: true };
+    }
+    throw new Error("Ticket sedang diproses penutupannya oleh proses lain. Coba lagi setelah beberapa saat.");
   }
-  await channel.delete("RapStore ticket archived as " + filename);
-  return { filename, messageId: archivedMessage.id, messageCount: messages.length };
+
+  try {
+    const messages = [];
+    let before;
+    while (true) {
+      const batch = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
+      if (!batch.size) break;
+      messages.push(...batch.values());
+      before = batch.last().id;
+      if (batch.size < 100) break;
+    }
+    messages.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+    const rows = messages.map(message => {
+      const author = message.author?.tag || message.author?.username || "Unknown";
+      const text = [message.content, ...componentTranscriptText(message.components)].filter(Boolean).join("\n\n");
+      const attachments = [...(message.attachments?.values?.() || [])].map(file =>
+        '<li><a href="' + escapeHtml(file.url) + '">' + escapeHtml(file.name || "attachment") + '</a></li>'
+      ).join("");
+      const body = text ? '<pre>' + escapeHtml(text) + '</pre>' : "";
+      return '<article><header><strong>' + escapeHtml(author) + '</strong> <time>' +
+        escapeHtml(new Date(message.createdTimestamp).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })) +
+        '</time></header>' + body + (attachments ? '<ul>' + attachments + '</ul>' : "") + '</article>';
+    }).join("\n");
+    const html = '<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>RapStore Ticket Transcript</title><style>body{font:14px system-ui,sans-serif;background:#111827;color:#e5e7eb;margin:0;padding:24px}h1{font-size:22px}p{color:#9ca3af}article{background:#1f2937;border-radius:8px;padding:14px;margin:12px 0;overflow-wrap:anywhere}header{display:flex;gap:12px;justify-content:space-between;border-bottom:1px solid #374151;padding-bottom:8px}time{color:#9ca3af;font-size:12px}pre{white-space:pre-wrap;font:inherit;margin:12px 0}a{color:#93c5fd}</style></head><body><h1>RapStore — Ticket Transcript</h1><p>Channel: ' +
+      escapeHtml(channel.name) + ' • Ticket: ' + escapeHtml(ticket.ticketPrefix ? ticket.ticketPrefix + "-" + ticket.ticketNumber : channel.name) +
+      ' • Closed by: ' + escapeHtml(effectiveClosedBy || "system") + ' • Reason: ' + escapeHtml(effectiveReason) + '</p>' + rows + '</body></html>';
+    const baseName = clean(ticket.ticketPrefix && Number.isInteger(ticket.ticketNumber)
+      ? ticket.ticketPrefix + "-" + ticket.ticketNumber : channel.name.replace(/^closed-/, ""), 80).replace(/[^a-zA-Z0-9_-]/g, "-");
+    const filename = baseName + "-#" + transcriptSuffix() + ".html";
+
+    // If a previous attempt uploaded the file but failed before saving its message ID,
+    // search recent archive history for the stable marker before uploading again.
+    let archivedMessage = null;
+    if (ticket.status === "closing" || ticket.archiveKey) {
+      let cursor;
+      for (let page = 0; page < 10 && !archivedMessage; page++) {
+        const batch = await archiveChannel.messages.fetch({ limit: 100, ...(cursor ? { before: cursor } : {}) });
+        if (!batch.size) break;
+        archivedMessage = batch.find(item => String(item.content || "").includes("[archive-key:" + archiveKey + "]")) || null;
+        cursor = batch.last().id;
+        if (batch.size < 100) break;
+      }
+    }
+    if (!archivedMessage) {
+      archivedMessage = await archiveChannel.send({
+        content: "Transcript tiket **" + baseName + "** • " + messages.length + " pesan • ditutup oleh " +
+          (effectiveClosedBy ? "<@" + effectiveClosedBy + ">" : "sistem") + ".\n[archive-key:" + archiveKey + "]",
+        files: [new AttachmentBuilder(Buffer.from(html, "utf8"), { name: filename })],
+        allowedMentions: { parse: [], users: [], roles: [] },
+      });
+    }
+    const archivedFilename = archivedMessage.attachments?.first()?.name || filename;
+    const saved = await tickets.updateOne(
+      { _id: ticket._id, status: "closing", archiveKey },
+      { $set: {
+        status: "closed", closedAt: new Date(), closedBy: effectiveClosedBy, closeReason: effectiveReason,
+        transcriptFileName: archivedFilename, transcriptChannelId: archiveChannel.id, transcriptMessageId: archivedMessage.id,
+      }, $unset: { archiveProcessingAt: "" } },
+    );
+    if (!saved.modifiedCount) {
+      const latest = await tickets.findOne({ _id: ticket._id });
+      if (!(latest?.status === "closed" && latest.transcriptMessageId === archivedMessage.id)) {
+        throw new Error("Transcript terkirim, tetapi status arsip belum berhasil disimpan. Tiket dipertahankan agar dapat dicoba ulang.");
+      }
+    }
+    if (ticket.buyerId && channel.permissionOverwrites?.edit) {
+      await channel.permissionOverwrites.edit(ticket.buyerId, { ViewChannel: false, SendMessages: false }).catch(error => {
+        console.error("[ticket-archive-lock]", error?.message || error);
+      });
+    }
+    await channel.delete("RapStore ticket archived as " + archivedFilename);
+    return { filename: archivedFilename, messageId: archivedMessage.id, messageCount: messages.length };
+  } catch (error) {
+    await tickets.updateOne(
+      { _id: ticket._id, status: "closing", archiveKey },
+      { $unset: { archiveProcessingAt: "" } },
+    ).catch(() => {});
+    throw error;
+  }
 }
 
 async function publishPendingVouches(client) {
@@ -435,6 +505,34 @@ async function runOrderMaintenance(client) {
   try {
     const db = getDatabase();
     await publishPendingVouches(client);
+    const staleClosingTickets = await db.collection("tickets").find({
+      status: "closing",
+      archiveProcessingAt: { $lt: new Date(Date.now() - 5 * 60 * 1000) },
+    }).sort({ archiveProcessingAt: 1 }).limit(20).toArray();
+    for (const staleTicket of staleClosingTickets) {
+      try {
+        const guild = await client.guilds.fetch(staleTicket.guildId);
+        const channel = await guild.channels.fetch(staleTicket.channelId).catch(error => {
+          if (Number(error?.code) === 10003) return null;
+          throw error;
+        });
+        if (channel) {
+          await archiveAndDeleteTicket({
+            channel, ticket: staleTicket, client,
+            closedBy: staleTicket.archiveClosedBy || "system",
+            reason: staleTicket.closeReason || "recovered_incomplete_archive",
+          });
+        } else {
+          await db.collection("tickets").updateOne({ _id: staleTicket._id, status: "closing" }, {
+            $set: { status: "missing_channel", closeReason: "channel_missing_before_archive", closeBlockedAt: new Date() },
+            $unset: { archiveProcessingAt: "" },
+          });
+          console.error("[ticket-archive-recovery] Channel is confirmed missing; transcript cannot be reconstructed:", staleTicket.channelId);
+        }
+      } catch (error) {
+        console.error("[ticket-archive-recovery]", staleTicket.channelId, error?.message || error);
+      }
+    }
     const alreadyArchived = await db.collection("tickets").find({
       status: "closed", transcriptFileName: { $exists: true }, channelId: { $exists: true },
     }).limit(50).toArray();
@@ -449,6 +547,7 @@ async function runOrderMaintenance(client) {
     const now = new Date();
     const dueOrders = await db.collection("orders").find({
       status: "DONE", autoCloseAt: { $lte: now }, ticketClosedAt: { $exists: false },
+      ticketCloseBlockedAt: { $exists: false },
     }).sort({ autoCloseAt: 1 }).limit(20).toArray();
     for (const candidate of dueOrders) {
       const claimed = await db.collection("orders").updateOne({
@@ -475,17 +574,27 @@ async function runOrderMaintenance(client) {
         await publishPendingVouches(client);
         vouch = await db.collection("vouches").findOne({ orderId: String(candidate._id) });
         if (!vouch?.publishedAt) throw new Error("Vouch belum berhasil dikirim; ticket tetap dibiarkan agar tidak kehilangan alur.");
-        const guild = await client.guilds.fetch(candidate.guildId).catch(() => null);
-        const channel = guild ? await guild.channels.fetch(candidate.channelId).catch(() => null) : null;
+        const guild = await client.guilds.fetch(candidate.guildId);
+        const channel = await guild.channels.fetch(candidate.channelId).catch(error => {
+          if (Number(error?.code) === 10003) return null;
+          throw error;
+        });
         const ticket = await db.collection("tickets").findOne({ guildId: candidate.guildId, channelId: candidate.channelId });
         if (channel && ticket && (ticket.status !== "closed" || !ticket.transcriptFileName)) {
           await archiveAndDeleteTicket({ channel, ticket, client, closedBy: "system", reason: "order_done_auto_close" });
         } else if (channel && ticket?.status === "closed" && ticket.transcriptFileName) {
           await channel.delete("RapStore ticket already archived as " + ticket.transcriptFileName);
-        } else if (!channel && ticket && ticket.status === "open") {
-          await db.collection("tickets").updateOne({ _id: ticket._id, status: "open" }, {
-            $set: { status: "deleted", closedAt: new Date(), closeReason: "channel_missing_before_auto_close" },
+        } else if (!channel && ticket && ["open", "closing"].includes(ticket.status)) {
+          await db.collection("tickets").updateOne({ _id: ticket._id, status: ticket.status }, {
+            $set: { status: "missing_channel", closedAt: new Date(), closeReason: "channel_missing_before_auto_close", closeBlockedAt: new Date() },
+            $unset: { archiveProcessingAt: "" },
           });
+          await db.collection("orders").updateOne({ _id: candidate._id }, {
+            $set: { ticketCloseBlockedAt: new Date(), ticketCloseBlockedReason: "channel_missing_before_archive", updatedAt: new Date() },
+            $unset: { closeProcessingAt: "" },
+          });
+          console.error("[order-auto-close] Channel is confirmed missing; transcript cannot be reconstructed:", candidate.orderCode);
+          continue;
         }
         await db.collection("orders").updateOne({ _id: candidate._id }, {
           $set: { ticketClosedAt: new Date(), updatedAt: new Date() }, $unset: { closeProcessingAt: "" },
