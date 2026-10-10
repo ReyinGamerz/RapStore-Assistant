@@ -237,11 +237,9 @@ async function upsertPersistentPanel(interaction, type, payload) {
       return;
     }
     message = await interaction.channel.send(payload);
-    await collection.updateOne(
-      { guildId: interaction.guildId, type },
-      { $set: { guildId: interaction.guildId, type, channelId: message.channelId, messageId: message.id, selectedCategory: type === "catalog" ? "" : undefined, selectedProductId: type === "catalog" ? "" : undefined, updatedAt: new Date() } },
-      { upsert: true },
-    );
+    const panelUpdate = { guildId: interaction.guildId, type, channelId: message.channelId, messageId: message.id, updatedAt: new Date() };
+    if (type === "catalog") Object.assign(panelUpdate, { selectedCategory: "", selectedProductId: "" });
+    await collection.updateOne({ guildId: interaction.guildId, type }, { $set: panelUpdate }, { upsert: true });
   } else {
     await collection.updateOne({ guildId: interaction.guildId, type }, { $set: { updatedAt: new Date() } });
   }
@@ -701,7 +699,6 @@ async function handleCatalogSelection(interaction) {
   await interaction.deferUpdate();
   const db = getDatabase();
   const panels = db.collection("persistent_panels");
-  const current = await panels.findOne({ guildId: interaction.guildId, type: "catalog" });
   if (interaction.customId === "rapstore:catalog:category") {
     const category = safeText(interaction.values[0], 80);
     await panels.updateOne({ guildId: interaction.guildId, type: "catalog" }, { $set: { selectedCategory: category, selectedProductId: "", updatedAt: new Date() } });
