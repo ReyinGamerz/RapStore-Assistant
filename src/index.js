@@ -798,7 +798,14 @@ async function handleCatalogSelection(interaction) {
       return;
     }
     const category = safeText(product.category || "Umum", 80);
-    await interaction.editReply(await buildCatalogPayload(category, id));
+    const unitPrice = Number(product.price);
+    if (!Number.isSafeInteger(unitPrice) || unitPrice < 1) {
+      await interaction.followUp(v2Payload({
+        content: "Harga produk ini belum valid. Hubungi Founder/Admin agar harga diperbaiki sebelum memesan.",
+        flags: EPHEMERAL | MessageFlags.IsComponentsV2,
+      }));
+      return;
+    }
     const confirmPanel = buildPanel(
       "KONFIRMASI PESANAN",
       "Lu memilih produk **" + safeText(product.name, 100) + "** dengan harga **" + formatPrice(product.price) + "**.\n\nLanjutkan untuk membuat tiket order, atau batalkan jika berubah pikiran.",
@@ -858,16 +865,16 @@ async function handleCatalogPageButton(interaction) {
 async function createCatalogOrderTicket(interaction, selectedProductId) {
   const db = getDatabase();
   if (!ObjectId.isValid(selectedProductId)) {
-    await interaction.followUp(v2Payload({
-      content: "Produk tidak valid. Pilih ulang produk dari katalog.",
+    await interaction.editReply(v2Payload({
+      content: "Produk tidak valid atau sudah tidak tersedia. Buka katalog dan pilih produk lagi.",
       flags: EPHEMERAL | MessageFlags.IsComponentsV2,
     }));
     return;
   }
   const selectedProduct = await db.collection("products").findOne({ _id: new ObjectId(selectedProductId), active: true });
   if (!selectedProduct) {
-    await interaction.followUp(v2Payload({
-      content: "Produk sudah tidak tersedia. Perbarui katalog lalu coba lagi.",
+    await interaction.editReply(v2Payload({
+      content: "Produk sudah tidak tersedia. Buka katalog lalu pilih produk aktif lagi.",
       flags: EPHEMERAL | MessageFlags.IsComponentsV2,
     }));
     return;
@@ -879,7 +886,7 @@ async function createCatalogOrderTicket(interaction, selectedProductId) {
       await reservations.insertOne({ guildId: interaction.guildId, buyerId: interaction.user.id, interactionId: interaction.id, createdAt: reservationTime });
     } catch (error) {
       if (error?.code === 11000) {
-        await interaction.followUp(v2Payload({
+        await interaction.editReply(v2Payload({
           content: "Permintaan tiket lu sedang diproses. Tunggu sebentar lalu cek daftar tiket sebelum mencoba lagi.",
           flags: EPHEMERAL | MessageFlags.IsComponentsV2,
         }));
