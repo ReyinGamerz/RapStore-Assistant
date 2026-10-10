@@ -57,5 +57,5 @@ QRIS and bank details are not bundled in the repository. If the corresponding co
 - All newly implemented order/payment messages use Discord Components V2; they do not use classic embeds.
 - The bot needs permission to manage channels and channel permission overwrites in the configured support category.
 - Configure `FOUNDER_ROLE_ID` and `ADMIN_ROLE_ID` for the intended roles.
-- The bot uses the `GuildMessages` intent to detect attachments in order tickets. Message content intent is not needed for attachment-only proof detection.
+- The bot uses the `GuildMessages` and privileged `MessageContent` intents to detect order-ticket attachments. Enable **Message Content Intent** in the Discord Developer Portal, or proof attachments may not be visible to the bot.
 - Keep the bot token, MongoDB URI, and private configuration out of GitHub. Configure MongoDB Atlas network access narrowly.
