@@ -8,6 +8,7 @@ import { config } from "./config.js";
 import { connectDatabase, closeDatabase, getDatabase } from "./database.js";
 import { refreshGlobalCommands } from "./global-commands.js";
 import { buildMessage, buildComponentsOnly, buildPanel } from "./ui.js";
+import { allocateTicketNumber, initializeOrderTicket, handleOrderInteraction, handleOrderMessage } from "./order-system.js";
 
 let client;
 let shuttingDown = false;
@@ -658,8 +659,9 @@ async function handleCatalogSelection(interaction) {
       return;
     }
     const isOrder = ticketType === "order_now";
+    const ticketNumber = await allocateTicketNumber(isOrder ? "order" : "question");
     const channel = await interaction.guild.channels.create({
-      name: (isOrder ? "order-" : "tanya-produk-") + (interaction.user.username.toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 12) || "buyer"),
+      name: ticketNumber.channelName,
       type: ChannelType.GuildText,
       parent: config.ids.supportCategory || undefined,
       topic: "RapStore " + ticketType + "; buyer " + interaction.user.id,
@@ -672,7 +674,7 @@ async function handleCatalogSelection(interaction) {
       ],
     });
     try {
-      await db.collection("tickets").insertOne({
+      const ticketInsert = await db.collection("tickets").insertOne({
         guildId: interaction.guildId,
         buyerId: interaction.user.id,
         channelId: channel.id,
@@ -682,18 +684,26 @@ async function handleCatalogSelection(interaction) {
         status: "open",
         createdAt: new Date(),
       });
-      const productLine = selectedProduct ? "\nProduk yang dipilih: **" + safeText(selectedProduct.name, 100) + "**" : "\nProduk belum dipilih dari katalog.";
-      const intro = isOrder
-        ? "Halo <@" + interaction.user.id + ">! Staf akan membantu melanjutkan pemesanan lu."
-        : "Halo <@" + interaction.user.id + ">! Silakan tulis pertanyaan produk lu di sini.";
-      const ticketWelcome = buildPanel(
-        isOrder ? "RAPSTORE — ORDER SEKARANG" : "RAPSTORE — TANYA-TANYA DULU",
-        intro + productLine + "\n\nJangan kirim password atau data sensitif."
-      );
-      ticketWelcome.addActionRowComponents(new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId("rapstore:ticket:close").setLabel("Tutup Tiket").setStyle(ButtonStyle.Danger)
-      ));
-      await channel.send({ flags: MessageFlags.IsComponentsV2, components: [ticketWelcome] });
+      if (isOrder) {
+        await initializeOrderTicket({
+          channel,
+          interaction,
+          ticketNumber: ticketNumber.number,
+          ticketId: ticketInsert.insertedId,
+          selectedProduct,
+        });
+      } else {
+        const productLine = selectedProduct ? "\nProduk yang dipilih: **" + safeText(selectedProduct.name, 100) + "**" : "\nProduk belum dipilih dari katalog.";
+        const intro = "Halo <@" + interaction.user.id + ">! Silakan tulis pertanyaan produk lu di sini.";
+        const ticketWelcome = buildPanel(
+          "RAPSTORE — TANYA-TANYA DULU",
+          intro + productLine + "\n\nJangan kirim password atau data sensitif."
+        );
+        ticketWelcome.addActionRowComponents(new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId("rapstore:ticket:close").setLabel("Tutup Tiket").setStyle(ButtonStyle.Danger)
+        ));
+        await channel.send({ flags: MessageFlags.IsComponentsV2, components: [ticketWelcome] });
+      }
       await interaction.followUp(v2Payload({ content: "✓ Tiket berhasil dibuat: <#" + channel.id + ">.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
     } catch (error) {
       await channel.delete("Failed to initialize catalog ticket").catch(() => {});
@@ -752,6 +762,9 @@ async function handleTicketButton(interaction) {
 }
 
 async function handleInteraction(interaction) {
+  if ((interaction.isButton() || interaction.isStringSelectMenu()) && (interaction.customId.startsWith("rapstore:order:") || interaction.customId.startsWith("rapstore:payment:"))) {
+    await handleOrderInteraction(interaction, client); return;
+  }
   if (interaction.isButton() && interaction.customId.startsWith("rapstore:ticket:")) {
     await handleTicketButton(interaction); return;
   }
@@ -786,7 +799,7 @@ async function shutdown(signal) {
 async function main() {
   await connectDatabase(config.mongoUri, config.mongoDbName);
   await synchronizeCategoryData();
-  client = new Client({ intents: [GatewayIntentBits.Guilds] });
+  client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages] });
   client.on(Events.InteractionCreate, interaction => {
     void handleInteraction(interaction).catch(async error => {
       const code = Number(error?.code);
@@ -807,6 +820,9 @@ async function main() {
         if (Number(replyError?.code) !== 10062 && replyError?.code !== "Unknown interaction") logError("interaction-error-response", replyError);
       }
     });
+  });
+  client.on(Events.MessageCreate, message => {
+    void handleOrderMessage(message).catch(error => logError("order-message", error));
   });
   client.once(Events.ClientReady, readyClient => console.log(`Logged in as ${readyClient.user.tag}; MongoDB Atlas ready.`));
   await client.login(config.discordToken);
