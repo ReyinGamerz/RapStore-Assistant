@@ -890,7 +890,7 @@ async function handleCatalogSelection(interaction) {
           await channel.send({ flags: MessageFlags.IsComponentsV2, components: [ticketWelcome] });
         }
       } catch (error) {
-        await db.collection("tickets").deleteOne({ channelId: channel.id }).catch(() => {});
+        await db.collection("tickets").deleteOne({ channelId: channel.id }).catch(error => console.error("[audit-log-write]", error?.message || error));
         await db.collection("orders").deleteMany({ channelId: channel.id, status: "ON HOLD" }).catch(() => {});
         await channel.delete("Failed to initialize catalog ticket").catch(() => {});
         throw error;
@@ -1096,7 +1096,7 @@ async function main() {
         guildId: guildId || tickets[0].guildId,
         details: { channelId: channel.id, ticketIds: tickets.map(ticket => String(ticket._id)), reason: "channel_deleted_in_discord", transcriptStatus: "unavailable" },
         createdAt: now,
-      }).catch(() => {});
+      }).catch(error => console.error("[audit-log-write]", error?.message || error));
       console.warn("[tickets] Unexpectedly deleted open ticket channel; records preserved and cleanup metadata updated:", channel.id);
     })().catch(error => logError("ticket-channel-delete-cleanup", error));
   });
