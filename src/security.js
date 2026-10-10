@@ -65,6 +65,16 @@ export function validateProofAttachments(attachments) {
  * Resolve the durable order state after an interrupted payment-review side effect.
  * "pending" means the proof is still the current proof and awaits staff review.
  */
+/**
+ * Treat an invalid configured deadline as expired (fail closed). Legacy orders
+ * without a deadline retain their existing behavior.
+ */
+export function isVouchWindowExpired(order, now = Date.now()) {
+  if (order?.autoCloseAt == null || order.autoCloseAt === "") return false;
+  const deadline = new Date(order.autoCloseAt).getTime();
+  return !Number.isFinite(deadline) || deadline <= Number(now);
+}
+
 export function expectedProofStatus(proof, order) {
   if (!proof || proof.status !== "pending") return null;
   if (!order || String(order.latestProofId || "") !== String(proof._id || "")) return "superseded";
