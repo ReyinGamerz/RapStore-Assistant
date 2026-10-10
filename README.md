@@ -19,8 +19,9 @@ npm start
 For a new install, run `npm install`, copy `.env.example` to `.env`, then set `DISCORD_TOKEN`, `DISCORD_CLIENT_ID`, and `MONGODB_URI`. Never commit or share `.env`. Global slash command changes can take time to appear in Discord.
 
 ## Active commands
-- `/catalog` — public interactive catalog message, intended for the catalog channel.
-- `/panel` — public persistent Founder/Admin management panel; only Founder/Admin can use its controls.
+- `/catalog` — Founder/Admin-only command to create or sync the public catalog message.
+- `/panel` — Founder/Admin-only command to create or sync the public management panel. Members only use the existing public messages; they cannot invoke these commands.
+- Slash commands are registered for `DISCORD_GUILD_ID` only, and guild command permissions allow only `FOUNDER_ROLE_ID` and `ADMIN_ROLE_ID`. Old global copies are removed during deployment.
 - The bot stores each server’s catalog/panel message and refreshes them on startup so existing messages use the latest code. Catalog data is also refreshed after category/product changes made through `/panel`.
 - Ticket creation shows a temporary “TIKET SEDANG DIBUAT” status before reporting success or failure.
 - **Edit product:** selecting a product opens its edit form directly. Change the category by entering the exact name of an existing category; new or misspelled category names are rejected.
