@@ -843,6 +843,33 @@ async function main() {
       }
     });
   });
+  client.on(Events.GuildChannelDelete, channel => {
+    void (async () => {
+      const db = getDatabase();
+      const tickets = await db.collection("tickets").find({
+        channelId: channel.id,
+        status: "open",
+      }).toArray();
+      if (!tickets.length) return;
+      const now = new Date();
+      await db.collection("tickets").updateMany(
+        { channelId: channel.id, status: "open" },
+        { $set: { status: "deleted", closedAt: now, closeReason: "discord_channel_deleted", cleanupAt: now } },
+      );
+      await db.collection("orders").updateMany(
+        { channelId: channel.id, status: "ON HOLD" },
+        { $set: { status: "CANCELLED", cancelledAt: now, cancelledBy: channel.client.user.id, cancelReason: "ticket_channel_deleted", updatedAt: now } },
+      );
+      await db.collection("audit_logs").insertOne({
+        action: "ticket.channel_deleted",
+        actorId: null,
+        guildId: channel.guild?.id || tickets[0].guildId,
+        details: { channelId: channel.id, ticketIds: tickets.map(ticket => String(ticket._id)), reason: "channel_deleted_in_discord" },
+        createdAt: now,
+      }).catch(() => {});
+      console.log("[tickets] Cleaned up " + tickets.length + " ticket record(s) for deleted channel " + channel.id + ".");
+    })().catch(error => logError("ticket-channel-delete-cleanup", error));
+  });
   client.on(Events.MessageCreate, message => {
     void handleOrderMessage(message, client).catch(error => logError("order-message", error));
   });
