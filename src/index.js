@@ -16,6 +16,7 @@ import { allocateTicketNumber, initializeOrderTicket, handleOrderInteraction, ha
 
 let client;
 let shuttingDown = false;
+let stopOrderMaintenance;
 const EPHEMERAL = MessageFlags.Ephemeral;
 const productPickerCache = new Map();
 const categoryPickerCache = new Map();
@@ -741,7 +742,6 @@ async function handleCatalogSelection(interaction) {
       await interaction.followUp(v2Payload({ content: "Pilih kategori terlebih dahulu, lalu pilih produk.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
       return;
     }
-    const { ObjectId } = await import("mongodb");
     if (!ObjectId.isValid(id)) {
       await interaction.followUp(v2Payload({ content: "Produk tidak valid. Silakan pilih ulang.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
       return;
@@ -977,6 +977,7 @@ async function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`Received ${signal}; shutting down.`);
+  stopOrderMaintenance?.();
   client?.destroy();
   try { await closeDatabase(); } catch (error) { logError("shutdown", error); process.exitCode = 1; }
 }
@@ -1067,7 +1068,7 @@ async function main() {
   const ready = new Promise(resolve => client.once(Events.ClientReady, resolve));
   await client.login(config.discordToken);
   const readyClient = client.isReady() ? client : await ready;
-  startOrderMaintenance(client);
+  stopOrderMaintenance = startOrderMaintenance(client);
   try {
     await refreshGlobalCommands({ guildIds: [...readyClient.guilds.cache.keys()] });
   } catch (error) {
