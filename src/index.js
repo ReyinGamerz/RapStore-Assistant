@@ -5,11 +5,13 @@ import {
   TextInputStyle,
 } from "discord.js";
 import { randomBytes } from "node:crypto";
+import { ObjectId } from "mongodb";
 import { config } from "./config.js";
 import { connectDatabase, closeDatabase, getDatabase } from "./database.js";
 import { refreshGlobalCommands } from "./global-commands.js";
 import { buildMessage, buildComponentsOnly, buildPanel } from "./ui.js";
 import { isStaffMember, canAccessTicket, canManuallyCloseTicket } from "./security.js";
+import { reconcileMissingTicket } from "./ticket-recovery.js";
 import { allocateTicketNumber, initializeOrderTicket, handleOrderInteraction, handleOrderMessage, archiveAndDeleteTicket, startOrderMaintenance } from "./order-system.js";
 
 let client;
@@ -804,28 +806,12 @@ async function handleCatalogSelection(interaction) {
         try { liveChannel = await interaction.guild.channels.fetch(activeTicket.channelId); }
         catch (error) { if (Number(error?.code) === 10003) liveChannel = null; else throw error; }
         if (liveChannel) { existing ||= activeTicket; continue; }
-        await db.collection("tickets").updateOne(
-          { _id: activeTicket._id, status: "open" },
-          { $set: { status: "deleted", closedAt: missingAt, closeReason: "discord_channel_missing", cleanupAt: missingAt, transcriptStatus: "unavailable" } },
-        );
-        const missingAt = new Date();
-        await db.collection("orders").updateMany(
-          { guildId: interaction.guildId, channelId: activeTicket.channelId, status: "ON HOLD" },
-          { $set: { status: "CANCELLED", paymentStatus: "cancelled", cancelledAt: missingAt, cancelledBy: interaction.user.id, cancelReason: "ticket_channel_missing", updatedAt: missingAt } },
-        );
-        await db.collection("payment_proofs").updateMany(
-          { guildId: interaction.guildId, channelId: activeTicket.channelId, status: "pending" },
-          { $set: { status: "superseded", supersededAt: missingAt, supersededReason: "ticket_channel_missing", updatedAt: missingAt }, $unset: { reviewSendingAt: "" } },
-        );
-        await db.collection("orders").updateMany(
-          { guildId: interaction.guildId, channelId: activeTicket.channelId, status: "PROSES", ticketClosedAt: { $exists: false } },
-          { $set: { ticketCloseBlockedAt: missingAt, ticketCloseBlockedReason: "channel_missing_before_archive", ticketChannelMissingAt: missingAt, transcriptStatus: "unavailable", updatedAt: missingAt }, $unset: { closeProcessingAt: "" } },
-        );
-        // Keep DONE orders eligible for their one-time vouch publication even if their channel vanished.
-        await db.collection("orders").updateMany(
-          { guildId: interaction.guildId, channelId: activeTicket.channelId, status: "DONE", ticketClosedAt: { $exists: false } },
-          { $set: { ticketChannelMissingAt: missingAt, transcriptStatus: "unavailable", updatedAt: missingAt }, $unset: { closeProcessingAt: "" } },
-        );
+        await reconcileMissingTicket({
+          db,
+          guildId: interaction.guildId,
+          activeTicket,
+          actorId: interaction.user.id,
+        });
       }
       if (existing) {
         await reportProgress("TIKET SUDAH ADA", "Lu sudah punya tiket yang masih terbuka: <#" + existing.channelId + ">. Selesaikan tiket itu sebelum membuat tiket baru.");
@@ -1078,13 +1064,15 @@ async function main() {
     console.log(`Logged in as ${readyClient.user.tag}; MongoDB Atlas ready.`);
     void refreshPersistentPanels(readyClient).catch(error => logError("persistent-panel-startup-sync", error));
   });
+  const ready = new Promise(resolve => client.once(Events.ClientReady, resolve));
   await client.login(config.discordToken);
+  const readyClient = client.isReady() ? client : await ready;
   startOrderMaintenance(client);
   try {
-    await refreshGlobalCommands();
+    await refreshGlobalCommands({ guildIds: [...readyClient.guilds.cache.keys()] });
   } catch (error) {
     logError("global-command-refresh", error);
-    console.error("Bot tetap berjalan, tetapi slash command guild belum berhasil diperbarui. Periksa DISCORD_GUILD_ID dan jalankan npm run commands:refresh setelah memperbaiki error.");
+    console.error("Bot tetap berjalan, tetapi refresh global slash commands atau pembersihan command guild lama belum selesai. Periksa izin aplikasi bot dan jalankan npm run commands:refresh lagi.");
   }
 }
 
