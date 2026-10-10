@@ -302,14 +302,38 @@ function componentTranscriptText(components, depth = 0) {
   if (!Array.isArray(components) || depth > 8) return [];
   const output = [];
   for (const component of components) {
-    if (component?.content) output.push(String(component.content));
-    if (component?.description) output.push(String(component.description));
-    if (component?.label && component?.type !== 1) output.push(String(component.label));
+    const content = component?.content ?? component?.data?.content;
+    const description = component?.description ?? component?.data?.description;
+    const label = component?.label ?? component?.data?.label;
+    if (content) output.push(String(content));
+    if (description) output.push(String(description));
+    if (label && component?.type !== 1) output.push(String(label));
     if (component?.components) output.push(...componentTranscriptText(component.components, depth + 1));
     if (component?.items) output.push(...componentTranscriptText(component.items, depth + 1));
     if (component?.accessory) output.push(...componentTranscriptText([component.accessory], depth + 1));
   }
   return [...new Set(output.map(value => value.trim()).filter(Boolean))];
+}
+
+function componentTranscriptMedia(components, depth = 0) {
+  if (!Array.isArray(components) || depth > 8) return [];
+  const output = [];
+  for (const component of components) {
+    const mediaUrl = component?.media?.url ?? component?.data?.media?.url ?? component?.url ?? component?.data?.url;
+    if (mediaUrl && safeHttpUrl(mediaUrl)) output.push({
+      url: mediaUrl,
+      description: component?.description ?? component?.data?.description ?? "Gambar dari pesan Discord",
+    });
+    if (component?.components) output.push(...componentTranscriptMedia(component.components, depth + 1));
+    if (component?.items) output.push(...componentTranscriptMedia(component.items, depth + 1));
+    if (component?.accessory) output.push(...componentTranscriptMedia([component.accessory], depth + 1));
+  }
+  const seen = new Set();
+  return output.filter(item => {
+    if (seen.has(item.url)) return false;
+    seen.add(item.url);
+    return true;
+  });
 }
 
 function transcriptImage(url, alt, className = "attachment-image") {
@@ -440,6 +464,10 @@ export async function archiveAndDeleteTicket({ channel, ticket, client, closedBy
         : "";
       const text = transcriptMessageText(message);
       const componentsText = componentTranscriptText(message.components);
+      const componentMedia = componentTranscriptMedia(message.components).map(item =>
+        '<div class="component-media">' + transcriptImage(item.url, item.description) +
+        (item.description ? '<div class="attachment-meta"><span>' + escapeHtml(item.description) + '</span></div>' : "") + '</div>'
+      ).join("");
       const content = text ? '<div class="message-content">' + escapeHtml(text).replace(/\n/g, "<br>") + '</div>' : "";
       const componentPanel = componentsText.length
         ? '<div class="component-panel">' + componentsText.map(line => '<div>' + escapeHtml(line).replace(/\n/g, "<br>") + '</div>').join("") + '</div>'
@@ -483,7 +511,7 @@ export async function archiveAndDeleteTicket({ channel, ticket, client, closedBy
       '.message-content{white-space:normal;overflow-wrap:anywhere}.component-panel{margin-top:7px;padding:10px 12px;background:#2b2d31;border-left:4px solid var(--accent);border-radius:4px;overflow-wrap:anywhere}.component-panel>div+div{margin-top:4px}' +
       '.reply-reference{font-size:12px;color:var(--muted);margin:0 0 7px;display:flex;gap:6px;align-items:baseline;overflow-wrap:anywhere}.reply-reference strong{color:#c9cdfb;flex-shrink:0}.reply-bar{height:10px;width:28px;border-top:2px solid #6d6f78;border-left:2px solid #6d6f78;flex-shrink:0}' +
       '.discord-embed{position:relative;margin-top:8px;padding:12px 14px;background:#2b2d31;border-left:4px solid var(--embed-color);border-radius:4px;max-width:680px;overflow:hidden}.embed-author{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:600;margin-bottom:7px}.embed-author-icon{width:20px;height:20px;border-radius:50%;object-fit:cover}.embed-title{font-weight:700;color:#00a8fc;margin-bottom:5px;overflow-wrap:anywhere}.embed-title a,.embed-author a{color:#00a8fc;text-decoration:none}.embed-description,.embed-field-value{white-space:pre-wrap;overflow-wrap:anywhere}.embed-fields{display:flex}.embed-field{margin-top:10px}.embed-field-name{font-weight:700;margin-bottom:3px}.embed-image{display:block;max-width:min(100%,520px);max-height:420px;object-fit:contain;object-position:left;border-radius:4px;margin-top:10px}.embed-thumbnail{float:right;max-width:100px;max-height:100px;object-fit:contain;margin:0 0 8px 12px;border-radius:4px}.embed-footer{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted);margin-top:10px}.embed-footer-icon{width:18px;height:18px;border-radius:50%;object-fit:cover}' +
-      '.attachments{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px}.attachment{max-width:100%;display:flex;flex-direction:column;gap:6px;align-items:flex-start}.attachment-image{display:block;max-width:min(100%,560px);max-height:560px;object-fit:contain;object-position:left top;border-radius:8px;border:1px solid #202127;background:#232428}.image-link{display:inline-block;max-width:100%}.attachment-meta{display:flex;flex-direction:column;gap:2px;font-size:12px}.attachment-name{color:#00a8fc;text-decoration:none;font-weight:600;overflow-wrap:anywhere}.attachment-meta span{color:var(--muted);font-size:11px}.file-icon{width:42px;height:42px;display:grid;place-items:center;background:#232428;border:1px solid var(--line);border-radius:6px;font-size:22px}.sticker-note{color:var(--muted);font-size:12px;margin-top:6px}' +
+      '.component-media{margin-top:8px}.attachments{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px}.attachment{max-width:100%;display:flex;flex-direction:column;gap:6px;align-items:flex-start}.attachment-image{display:block;max-width:min(100%,560px);max-height:560px;object-fit:contain;object-position:left top;border-radius:8px;border:1px solid #202127;background:#232428}.image-link{display:inline-block;max-width:100%}.attachment-meta{display:flex;flex-direction:column;gap:2px;font-size:12px}.attachment-name{color:#00a8fc;text-decoration:none;font-weight:600;overflow-wrap:anywhere}.attachment-meta span{color:var(--muted);font-size:11px}.file-icon{width:42px;height:42px;display:grid;place-items:center;background:#232428;border:1px solid var(--line);border-radius:6px;font-size:22px}.sticker-note{color:var(--muted);font-size:12px;margin-top:6px}' +
       '.footer{border-top:1px solid var(--line);padding-top:14px;margin-top:24px;color:var(--muted);font-size:11px;text-align:center}' +
       '@media(max-width:600px){.topbar{padding:13px 14px}.layout{padding:16px 14px 32px}.message{gap:9px}.avatar-wrap{flex-basis:34px}.avatar{width:34px;height:34px}.message-header{gap:5px}.username{display:none}.attachment-image{max-height:380px}.discord-embed{padding:10px}.ticket-title{font-size:18px}}' +
       '</style></head><body><div class="topbar"><div class="brand">💬 RapStore — Ticket Transcript</div><div class="subtitle">' +
