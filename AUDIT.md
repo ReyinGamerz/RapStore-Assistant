@@ -17,6 +17,8 @@ Confirmed findings on the audited base:
 - **P1 — Ticket recovery crash:** `src/index.js` referenced `missingAt` before its `const` declaration. When ticket creation encountered a stale ticket record whose Discord channel was missing, the cleanup path would throw a `ReferenceError` and abort that ticket creation.
 - **P2 — Panel edit/delete crash:** `src/index.js` used `ObjectId` in Founder/Admin category/product handlers without importing it at module scope. A dynamic import inside catalog selection does not make the name available to those handlers.
 - **P2 — Slash-command architecture mismatch:** `src/global-commands.js` registered guild-scoped commands and cleared global commands, contradicting the requested global-only setup without `DISCORD_GUILD_ID`.
+- **P2 — Maintenance shutdown leak:** the 30-second maintenance interval was not cleared and an active run was not awaited before MongoDB closed.
+- **P2 — Shared catalog selection:** category/product changes edited one public message for everyone, allowing concurrent users to interfere with the visible selection.
 - **P2 — No automatic startup validation:** `npm start` launched the bot without running tests or syntax checks first.
 - **P2 — Dependency reproducibility:** the audited repository has no `package-lock.json`, so transitive dependency versions are not pinned.
 
@@ -27,7 +29,7 @@ The audit branch fixes the first four items and adds a regression test for ticke
 | Path | Role | Status | Notes |
 |---|---|---|---|
 | `src/index.js` | Startup, interaction routing, panels, catalog, ticket creation/close, Discord events | REVIEWED — FIXED, PENDING TEST | Found undeclared `ObjectId` and a temporal-dead-zone bug in stale-ticket recovery |
-| `src/order-system.js` | Order/payment/vouch/transcript lifecycle and maintenance | REVIEWED | Inspected authorization, state transitions, archival, retry, and cleanup paths; live integration not run |
+| `src/order-system.js` | Order/payment/vouch/transcript lifecycle and maintenance | REVIEWED — FIXED, PENDING TEST | Inspected authorization/state transitions; maintenance now stops and awaits an active run on shutdown |
 | `src/security.js` | Staff/owner checks, attachment validation, transcript limits, payment reconciliation | REVIEWED | Existing unit tests inspected |
 | `src/ticket-recovery.js` | Missing-ticket state reconciliation | ADDED — PENDING TEST | Shared timestamp; injected database dependency for regression testing |
 | `src/config.js` | Environment configuration | REVIEWED — UPDATED | Removed obsolete guild ID setting |
@@ -66,7 +68,7 @@ npm start
 
 /catalog -> Founder/Admin handler check -> public persistent catalog
 /panel   -> Founder/Admin handler check -> ephemeral management panel
-catalog select -> validate category/product/intent -> reserve user ticket -> create channel + DB record
+public catalog select -> private per-user catalog copy -> validate category/product/intent -> reserve user ticket -> create channel + DB record
 order ticket -> order record -> payment selection -> proof submission -> staff review
              -> DONE -> vouch -> transcript archive -> ticket channel deletion
 ticket close -> owner/staff check -> lifecycle guard -> transcript archive -> channel deletion
@@ -85,7 +87,8 @@ Command definitions live in `src/commands.js`. The event router is in `src/index
 | AUD-005 | P2 | High | `package-lock.json` | No lockfile, so dependency resolution is not reproducible and transitive versions are not pinned | OPEN — registry/network needed |
 | AUD-006 | P2 | High | Test coverage | Existing tests are primarily pure helper tests; full Discord/MongoDB end-to-end tests are not present in the inspected inventory | OPEN — integration environment needed |
 | AUD-007 | P2 | Medium | MongoDB index initialization | Unique-index creation may fail on production data containing duplicates or incompatible legacy records | BLOCKED — inspect metadata/backup before migration |
-| AUD-008 | P2 | Medium | Public persistent catalog | Category/product choices update one shared public message and guild-level saved selection; concurrent users can influence the visible selection | OPEN — confirm intended UX before changing behavior |
+| AUD-008 | P2 | High | Public persistent catalog | Category/product selection edited the shared public message; users could interfere with each other's selection state | FIXED — PENDING LIVE E2E; each user now gets a private catalog copy on first selection |
+| AUD-009 | P2 | High | `src/order-system.js`, `src/index.js` shutdown | Maintenance interval was never cleared and an active run was not awaited before MongoDB closed | FIXED — PENDING TEST |
 
 ## E. Security and permission matrix
 
@@ -110,10 +113,12 @@ Role IDs, channel overwrites, and bot permissions still require live-server veri
 1. Extracted missing-ticket reconciliation into `src/ticket-recovery.js`. The timestamp is created before writes and shared across ticket/order/proof updates.
 2. Imported `ObjectId` in `src/index.js` so panel category/product handlers can use it.
 3. Added `test/ticket-recovery.test.js` for missing-channel recovery and invalid identifiers.
-4. Migrated slash-command deployment to global registration; attempts to remove legacy guild-scoped copies only in guilds the bot currently enumerates. Cleanup errors are surfaced instead of reporting success.
-5. Removed `DISCORD_GUILD_ID` from runtime config and the example environment.
-6. Added `npm run validate` and `prestart` so each `npm start` runs unit and syntax checks first.
-7. Updated README instructions to match the actual deployment flow.
+4. Changed catalog category/product selection to a per-user ephemeral copy, leaving the public catalog unchanged.
+5. Added a stop function for order maintenance; shutdown clears the interval and waits for the active maintenance run before closing MongoDB.
+6. Migrated slash-command deployment to global registration; attempts to remove legacy guild-scoped copies only in guilds the bot currently enumerates. Cleanup errors are surfaced instead of reporting success.
+7. Removed `DISCORD_GUILD_ID` from runtime config and the example environment.
+8. Added `npm run validate` and `prestart` so each `npm start` runs unit and syntax checks first.
+9. Updated README instructions to match the actual deployment flow.
 
 No production Discord server, MongoDB database, or VPS was modified.
 
@@ -124,6 +129,7 @@ No production Discord server, MongoDB database, or VPS was modified.
 | Existing `test/security.test.js` | Unit | NOT RUN | Source inspected; local clone failed because GitHub DNS was unavailable |
 | New `test/ticket-recovery.test.js` | Regression unit | NOT RUN — PENDING CI | Added on audit branch |
 | `npm run check` | Syntax | NOT RUN — PENDING CI | New module added to syntax-check script |
+| Maintenance shutdown | Static review | NOT RUN — PENDING CI | Timer clear and active-run wait are wired; no live shutdown test |
 | Global command refresh | Discord integration | BLOCKED | Requires real bot token and Discord API |
 | Ticket permission/visibility | Live E2E | BLOCKED | Requires configured Discord test server |
 | Payment proof, vouch, transcript lifecycle | Live E2E | BLOCKED | Requires Discord + MongoDB test environment |
@@ -135,7 +141,7 @@ No production Discord server, MongoDB database, or VPS was modified.
 - No package lockfile exists. Dependency versions are not fully reproducible until a lockfile is generated and committed in an environment with registry access.
 - Global command propagation can take time. Legacy guild command cleanup only covers guilds the bot can currently enumerate.
 - Discord role/channel permissions, Components V2 payloads, transcript uploads, and MongoDB concurrency need controlled live tests.
-- Public catalog selection is shared across users. Confirm the intended UX before redesigning it as per-user ephemeral state.
+- The per-user catalog flow needs a live Discord smoke test to verify the public message remains unchanged and ephemeral interactions update only the invoking user's private copy.
 - Production database documents and indexes were not inspected. Do not run destructive migrations or drop indexes without backup and approval.
 
 ## I. VPS update instructions
@@ -143,7 +149,7 @@ No production Discord server, MongoDB database, or VPS was modified.
 After reviewing and merging the PR:
 
 ```bash
-cd `/RapStore-Assistant
+cd ~/RapStore-Assistant
 git pull
 npm install
 npm start
