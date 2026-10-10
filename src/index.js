@@ -804,7 +804,6 @@ async function handleCatalogSelection(interaction) {
         try { liveChannel = await interaction.guild.channels.fetch(activeTicket.channelId); }
         catch (error) { if (Number(error?.code) === 10003) liveChannel = null; else throw error; }
         if (liveChannel) { existing ||= activeTicket; continue; }
-        const missingAt = new Date();
         await db.collection("tickets").updateOne(
           { _id: activeTicket._id, status: "open" },
           { $set: { status: "deleted", closedAt: missingAt, closeReason: "discord_channel_missing", cleanupAt: missingAt, transcriptStatus: "unavailable" } },
