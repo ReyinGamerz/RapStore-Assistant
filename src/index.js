@@ -679,6 +679,8 @@ async function handleCatalogSelection(interaction) {
         buyerId: interaction.user.id,
         channelId: channel.id,
         type: ticketType,
+        ticketNumber: ticketNumber.number,
+        ticketPrefix: isOrder ? "rap" : "tanya",
         productId: selectedProduct ? String(selectedProduct._id) : null,
         productName: selectedProduct ? safeText(selectedProduct.name, 100) : null,
         status: "open",
@@ -706,6 +708,8 @@ async function handleCatalogSelection(interaction) {
       }
       await interaction.followUp(v2Payload({ content: "✓ Tiket berhasil dibuat: <#" + channel.id + ">.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
     } catch (error) {
+      await db.collection("tickets").deleteOne({ channelId: channel.id }).catch(() => {});
+      await db.collection("orders").deleteMany({ channelId: channel.id, status: "ON HOLD" }).catch(() => {});
       await channel.delete("Failed to initialize catalog ticket").catch(() => {});
       throw error;
     }
@@ -799,7 +803,7 @@ async function shutdown(signal) {
 async function main() {
   await connectDatabase(config.mongoUri, config.mongoDbName);
   await synchronizeCategoryData();
-  client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages] });
+  client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
   client.on(Events.InteractionCreate, interaction => {
     void handleInteraction(interaction).catch(async error => {
       const code = Number(error?.code);
@@ -822,7 +826,7 @@ async function main() {
     });
   });
   client.on(Events.MessageCreate, message => {
-    void handleOrderMessage(message).catch(error => logError("order-message", error));
+    void handleOrderMessage(message, client).catch(error => logError("order-message", error));
   });
   client.once(Events.ClientReady, readyClient => console.log(`Logged in as ${readyClient.user.tag}; MongoDB Atlas ready.`));
   await client.login(config.discordToken);
