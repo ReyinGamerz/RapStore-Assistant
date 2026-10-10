@@ -482,15 +482,20 @@ async function archiveTicketImages(archiveChannel, messages, ticket, archiveKey,
   if (!photos.length) return urls;
 
   // Reuse all images already copied during an interrupted archive attempt.
-  const markerLookup = new Map(photos.map(photo => ["[archive-photo-key:" + photo.marker + "]", photo]));
+  const markerLookup = photos.map(photo => ({
+    legacy: "[archive-photo-key:" + photo.marker + "]",
+    hidden: encodeInvisibleMarker("[archive-photo-key:" + photo.marker + "]"),
+    photo,
+  }));
   let before;
   for (let page = 0; page < 10; page++) {
     const batch = await archiveChannel.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
     if (!batch.size) break;
     for (const message of batch.values()) {
       const content = String(message.content || "");
-      for (const [marker, photo] of markerLookup) {
-        if (urls.has(photo.attachment.url) || !content.includes(marker)) continue;
+      for (const marker of markerLookup) {
+        const { photo } = marker;
+        if (urls.has(photo.attachment.url) || (!content.includes(marker.legacy) && !content.includes(marker.hidden))) continue;
         const prefix = "rap-" + photo.token + "-";
         const archived = message.attachments?.find(item => String(item.name || "").startsWith(prefix));
         if (archived?.url) urls.set(photo.attachment.url, archived.url);
@@ -498,8 +503,10 @@ async function archiveTicketImages(archiveChannel, messages, ticket, archiveKey,
       // Compatibility with old archive messages that contain exactly one photo.
       if (message.attachments?.size === 1) {
         const archived = message.attachments.first();
-        for (const [marker, photo] of markerLookup) {
-          if (!urls.has(photo.attachment.url) && content.includes(marker) && archived?.url) {
+        for (const marker of markerLookup) {
+          const { photo } = marker;
+          if (!urls.has(photo.attachment.url) &&
+              (content.includes(marker.legacy) || content.includes(marker.hidden)) && archived?.url) {
             urls.set(photo.attachment.url, archived.url);
           }
         }
@@ -517,10 +524,9 @@ async function archiveTicketImages(archiveChannel, messages, ticket, archiveKey,
       const name = clean(photo.attachment.name || "foto-tiket.png", 150).replace(/[\\/]/g, "_");
       return { attachment: photo.attachment.url, name: "rap-" + photo.token + "-" + name };
     });
-    const markers = group.map(photo => "[archive-photo-key:" + photo.marker + "]").join("\n");
+    const markers = group.map(photo => encodeInvisibleMarker("[archive-photo-key:" + photo.marker + "]")).join("");
     const archivedMessage = await archiveChannel.send({
-      content: "Foto tiket #" + baseName + " • batch " + (Math.floor(offset / maxFilesPerMessage) + 1) +
-        " [" + group.length + " foto]\n" + markers,
+      content: "Foto tiket #" + baseName + " • " + group.length + " foto" + markers,
       files,
       allowedMentions: { parse: [], users: [], roles: [] },
     });
@@ -693,7 +699,12 @@ export async function archiveAndDeleteTicket({ channel, ticket, client, closedBy
       for (let page = 0; page < 10 && !archivedMessage; page++) {
         const batch = await archiveChannel.messages.fetch({ limit: 100, ...(cursor ? { before: cursor } : {}) });
         if (!batch.size) break;
-        archivedMessage = batch.find(item => String(item.content || "").includes("[archive-key:" + archiveKey + "]")) || null;
+        const legacyMarker = "[archive-key:" + archiveKey + "]";
+        const hiddenMarker = encodeInvisibleMarker(legacyMarker);
+        archivedMessage = batch.find(item => {
+          const content = String(item.content || "");
+          return content.includes(legacyMarker) || content.includes(hiddenMarker);
+        }) || null;
         cursor = batch.last().id;
         if (batch.size < 100) break;
       }
@@ -701,7 +712,8 @@ export async function archiveAndDeleteTicket({ channel, ticket, client, closedBy
     if (!archivedMessage) {
       archivedMessage = await archiveChannel.send({
         content: "Transcript tiket **" + baseName + "** • " + messages.length + " pesan • ditutup oleh " +
-          (effectiveClosedBy ? "<@" + effectiveClosedBy + ">" : "sistem") + ".\n[archive-key:" + archiveKey + "]",
+          (effectiveClosedBy ? "<@" + effectiveClosedBy + ">" : "sistem") + "." +
+          encodeInvisibleMarker("[archive-key:" + archiveKey + "]"),
         files: [new AttachmentBuilder(Buffer.from(html, "utf8"), { name: filename })],
         allowedMentions: { parse: [], users: [], roles: [] },
       });
