@@ -1356,89 +1356,176 @@ export async function handleOrderInteraction(interaction, client) {
   }
 
   if (customId.startsWith("rapstore:payment:process:") || customId.startsWith("rapstore:payment:invalid:")) {
+    if (!interaction.isButton()) {
+      await replyNotice(interaction, "AKSI TIDAK VALID", "Tombol verifikasi pembayaran ini tidak valid.");
+      return;
+    }
     if (!interaction.inGuild() || !staff(interaction.member)) {
       await replyNotice(interaction, "AKSES DITOLAK", "Hanya Founder/Admin yang dapat memverifikasi bukti transfer.");
       return;
     }
-    const parts = customId.split(":");
-    const action = parts[2];
-    const proofId = parts[3] || "";
+
+    const action = customId.startsWith("rapstore:payment:process:") ? "process" : "invalid";
+    const proofId = customId.slice(("rapstore:payment:" + action + ":").length);
+    const staleBody = "Bukti ini sudah tidak aktif. Periksa panel PESANAN untuk status terbaru.";
     if (!ObjectId.isValid(proofId)) {
-      await replyNotice(interaction, "BUKTI TIDAK VALID", "ID bukti transfer tidak valid.");
+      await updatePaymentReviewMessage(interaction, "BUKTI TIDAK VALID", "ID bukti transfer tidak valid; tombol verifikasi dinonaktifkan.");
       return;
     }
-    const proof = await db.collection("payment_proofs").findOne({ _id: new ObjectId(proofId), status: "pending" });
+
+    // A review button is valid only inside the exact guild/channel that received the proof.
+    let proof = await db.collection("payment_proofs").findOne({
+      _id: new ObjectId(proofId),
+      guildId: interaction.guildId,
+      channelId: interaction.channelId,
+    });
     if (!proof) {
-      await replyNotice(interaction, "BUKTI SUDAH DIPROSES", "Bukti ini sudah diperiksa atau tidak lagi aktif.");
+      await updatePaymentReviewMessage(interaction, "BUKTI TIDAK DITEMUKAN", staleBody);
       return;
     }
-    const order = await db.collection("orders").findOne({ _id: new ObjectId(proof.orderId), status: "ON HOLD" });
-    if (!order) {
-      await replyNotice(interaction, "PESANAN TIDAK AKTIF", "Pesanan tidak ditemukan atau sudah tidak berada pada status ON HOLD.");
+
+    const loadOrder = async () => {
+      if (!ObjectId.isValid(String(proof.orderId || ""))) return null;
+      return db.collection("orders").findOne({
+        _id: new ObjectId(proof.orderId),
+        guildId: interaction.guildId,
+        channelId: interaction.channelId,
+      });
+    };
+    let order = await loadOrder();
+    if (!order || String(order.buyerId) !== String(proof.buyerId)) {
+      await db.collection("payment_proofs").updateOne({ _id: proof._id, status: "pending" }, {
+        $set: { status: "superseded", supersededAt: new Date(), supersededReason: "order_missing_or_mismatched", updatedAt: new Date() },
+      }).catch(error => console.error("[payment-proof-stale]", error?.message || error));
+      await updatePaymentReviewMessage(interaction, "BUKTI TIDAK AKTIF", staleBody);
       return;
     }
-    if (action === "process") {
-      const result = await db.collection("payment_proofs").updateOne(
-        { _id: proof._id, status: "pending" },
-        { $set: { status: "accepted", reviewedAt: new Date(), reviewedBy: interaction.user.id } },
-      );
-      if (!result.modifiedCount) {
-        await replyNotice(interaction, "BUKTI SUDAH DIPROSES", "Admin lain sudah memeriksa bukti ini.");
-        return;
+
+    const proofIsLatest = currentOrder => String(currentOrder?.latestProofId || "") === String(proof._id);
+    const markProofTerminal = async (status, reviewerId = interaction.user.id) => {
+      const now = new Date();
+      const set = { status, reviewedAt: proof.reviewedAt || now, reviewedBy: proof.reviewedBy || reviewerId, updatedAt: now };
+      await db.collection("payment_proofs").updateOne({ _id: proof._id, status: "pending" }, { $set: set })
+        .catch(error => console.error("[payment-proof-finalize]", error?.message || error));
+      proof = { ...proof, ...set };
+    };
+    const showCommittedState = async currentOrder => {
+      if (!proofIsLatest(currentOrder)) return false;
+      if (currentOrder.status === "PROSES" && currentOrder.paymentStatus === "verified") {
+        await updatePaymentReviewMessage(interaction, "BUKTI VALID — PESANAN DIPROSES",
+          "Bukti transfer sudah dinyatakan valid oleh <@" + interaction.user.id + ">.
+" +
+          "Pembeli: <@" + currentOrder.buyerId + ">
+" +
+          "Pesanan **" + clean(currentOrder.orderCode, 40) + "** sekarang berstatus **PROSES**.");
+        await markProofTerminal("accepted", currentOrder.reviewedBy || interaction.user.id);
+        await db.collection("payment_proofs").updateMany(
+          { orderId: String(currentOrder._id), _id: { $ne: proof._id }, status: "pending" },
+          { $set: { status: "superseded", supersededAt: new Date(), supersededReason: "another_proof_accepted", updatedAt: new Date() } },
+        ).catch(error => console.error("[payment-proof-supersede]", error?.message || error));
+        await refreshOrderMessage(currentOrder, client).catch(error => console.error("[payment-review-order-refresh]", error?.message || error));
+        await db.collection("audit_logs").insertOne({
+          action: "payment.verified", actorId: interaction.user.id, guildId: interaction.guildId,
+          details: { orderId: String(currentOrder._id), proofId: String(proof._id), orderCode: currentOrder.orderCode },
+          createdAt: new Date(),
+        }).catch(() => {});
+        return true;
       }
+      if (currentOrder.status === "ON HOLD" && currentOrder.paymentStatus === "rejected") {
+        await updatePaymentReviewMessage(interaction, "BUKTI TRANSFER TIDAK VALID",
+          "Diperiksa oleh <@" + interaction.user.id + ">.
+" +
+          "<@" + currentOrder.buyerId + ">, bukti ini tidak valid. Silakan kirim ulang bukti pembayaran yang jelas dan sesuai nominal.
+" +
+          "Status pesanan tetap **ON HOLD**.");
+        await markProofTerminal("rejected", currentOrder.reviewedBy || interaction.user.id);
+        await refreshOrderMessage(currentOrder, client).catch(error => console.error("[payment-review-order-refresh]", error?.message || error));
+        await db.collection("audit_logs").insertOne({
+          action: "payment.rejected", actorId: interaction.user.id, guildId: interaction.guildId,
+          details: { orderId: String(currentOrder._id), proofId: String(proof._id), orderCode: currentOrder.orderCode },
+          createdAt: new Date(),
+        }).catch(() => {});
+        return true;
+      }
+      return false;
+    };
+
+    // Recover an interrupted prior click instead of telling staff the already-committed review failed.
+    if (await showCommittedState(order)) return;
+    if (proof.status !== "pending" || !proofIsLatest(order) ||
+        order.status !== "ON HOLD" || order.paymentStatus !== "pending_review") {
+      await db.collection("payment_proofs").updateOne({ _id: proof._id, status: "pending" }, {
+        $set: { status: "superseded", supersededAt: new Date(), supersededReason: "order_state_changed", updatedAt: new Date() },
+      }).catch(error => console.error("[payment-proof-stale]", error?.message || error));
+      await updatePaymentReviewMessage(interaction, "BUKTI SUDAH TIDAK AKTIF", staleBody);
+      return;
+    }
+
+    const now = new Date();
+    const orderFilter = {
+      _id: order._id,
+      guildId: interaction.guildId,
+      channelId: interaction.channelId,
+      status: "ON HOLD",
+      paymentStatus: "pending_review",
+      latestProofId: String(proof._id),
+    };
+    const orderChanges = action === "process"
+      ? { status: "PROSES", paymentStatus: "verified", paidAt: now, reviewedBy: interaction.user.id, updatedAt: now }
+      : { paymentStatus: "rejected", reviewedAt: now, reviewedBy: interaction.user.id, updatedAt: now };
+    const transition = await db.collection("orders").updateOne(orderFilter, { $set: orderChanges });
+    order = await loadOrder();
+
+    if (!transition.modifiedCount) {
+      // Another reviewer or cancellation may have won the conditional state transition.
+      if (order && await showCommittedState(order)) return;
+      await db.collection("payment_proofs").updateOne({ _id: proof._id, status: "pending" }, {
+        $set: { status: "superseded", supersededAt: new Date(), supersededReason: "concurrent_order_state_change", updatedAt: new Date() },
+      }).catch(error => console.error("[payment-proof-stale]", error?.message || error));
+      await updatePaymentReviewMessage(interaction, "BUKTI SUDAH TIDAK AKTIF",
+        "Status pesanan berubah sebelum tombol ini diproses. Buka panel PESANAN untuk melihat status terbaru.");
+      return;
+    }
+
+    // The order transition is authoritative. Replace this exact review message first;
+    // panel refresh, order logs and audit records must never block this UI update.
+    if (action === "process") {
+      await updatePaymentReviewMessage(interaction, "BUKTI VALID — PESANAN DIPROSES",
+        "Bukti transfer sudah dinyatakan valid oleh <@" + interaction.user.id + ">.
+" +
+        "Pembeli: <@" + order.buyerId + ">
+" +
+        "Pesanan **" + clean(order.orderCode, 40) + "** sekarang berstatus **PROSES**.");
+      await db.collection("payment_proofs").updateOne({ _id: proof._id, status: "pending" }, {
+        $set: { status: "accepted", reviewedAt: now, reviewedBy: interaction.user.id, updatedAt: now },
+      }).catch(error => console.error("[payment-proof-accept]", error?.message || error));
       await db.collection("payment_proofs").updateMany(
         { orderId: String(order._id), _id: { $ne: proof._id }, status: "pending" },
-        { $set: { status: "superseded", updatedAt: new Date() } },
-      );
-      const orderUpdate = await db.collection("orders").updateOne({
-        _id: order._id, status: "ON HOLD", paymentStatus: "pending_review", latestProofId: String(proof._id),
-      }, {
-        $set: { status: "PROSES", paymentStatus: "verified", paidAt: new Date(), reviewedBy: interaction.user.id, updatedAt: new Date() },
-      });
-      if (!orderUpdate.modifiedCount) {
-        await db.collection("payment_proofs").updateOne({ _id: proof._id, status: "accepted" }, { $set: { status: "superseded", updatedAt: new Date() } });
-        await replyNotice(interaction, "PESANAN TIDAK AKTIF", "Status pesanan sudah berubah. Bukti ini tidak dapat digunakan untuk memproses pesanan.");
-        return;
-      }
-      const updated = await db.collection("orders").findOne({ _id: order._id });
-      await refreshOrderMessage(updated, client);
-      await interaction.update(v2(buildPanel(
-        "BUKTI TRANSFER DITERIMA",
-        "Diperiksa oleh <@" + interaction.user.id + ">.\nPembeli <@" + order.buyerId + "> sudah dikonfirmasi. Pesanan **" + clean(order.orderCode, 40) + "** sekarang berstatus **PROSES**.",
-      )));
+        { $set: { status: "superseded", supersededAt: now, supersededReason: "another_proof_accepted", updatedAt: now } },
+      ).catch(error => console.error("[payment-proof-supersede]", error?.message || error));
+      await refreshOrderMessage(order, client).catch(error => console.error("[payment-review-order-refresh]", error?.message || error));
       await db.collection("audit_logs").insertOne({
         action: "payment.verified", actorId: interaction.user.id, guildId: interaction.guildId,
-        details: { orderId: String(order._id), proofId: String(proof._id), orderCode: order.orderCode }, createdAt: new Date(),
+        details: { orderId: String(order._id), proofId: String(proof._id), orderCode: order.orderCode },
+        createdAt: new Date(),
       }).catch(() => {});
       return;
     }
-    const result = await db.collection("payment_proofs").updateOne(
-      { _id: proof._id, status: "pending" },
-      { $set: { status: "rejected", reviewedAt: new Date(), reviewedBy: interaction.user.id } },
-    );
-    if (!result.modifiedCount) {
-      await replyNotice(interaction, "BUKTI SUDAH DIPROSES", "Admin lain sudah memeriksa bukti ini.");
-      return;
-    }
-    const rejectedOrderUpdate = await db.collection("orders").updateOne({
-      _id: order._id, status: "ON HOLD", paymentStatus: "pending_review", latestProofId: String(proof._id),
-    }, {
-      $set: { paymentStatus: "rejected", updatedAt: new Date() },
-    });
-    if (!rejectedOrderUpdate.modifiedCount) {
-      await db.collection("payment_proofs").updateOne({ _id: proof._id, status: "rejected" }, { $set: { status: "superseded", updatedAt: new Date() } });
-      await replyNotice(interaction, "PESANAN TIDAK AKTIF", "Status pesanan sudah berubah. Bukti ini tidak dapat ditolak untuk pesanan yang sudah tidak aktif.");
-      return;
-    }
-    const rejectedOrder = await db.collection("orders").findOne({ _id: order._id });
-    await refreshOrderMessage(rejectedOrder, client);
-    await interaction.update(v2(buildPanel(
-      "BUKTI TRANSFER TIDAK VALID",
-      "Diperiksa oleh <@" + interaction.user.id + ">.\n<@" + order.buyerId + ">, bukti ini tidak valid. Silakan kirim ulang bukti pembayaran yang jelas dan sesuai nominal. Status pesanan tetap **ON HOLD**.",
-    )));
+
+    await updatePaymentReviewMessage(interaction, "BUKTI TRANSFER TIDAK VALID",
+      "Diperiksa oleh <@" + interaction.user.id + ">.
+" +
+      "<@" + order.buyerId + ">, bukti ini tidak valid. Silakan kirim ulang bukti pembayaran yang jelas dan sesuai nominal.
+" +
+      "Status pesanan tetap **ON HOLD**.");
+    await db.collection("payment_proofs").updateOne({ _id: proof._id, status: "pending" }, {
+      $set: { status: "rejected", reviewedAt: now, reviewedBy: interaction.user.id, updatedAt: now },
+    }).catch(error => console.error("[payment-proof-reject]", error?.message || error));
+    await refreshOrderMessage(order, client).catch(error => console.error("[payment-review-order-refresh]", error?.message || error));
     await db.collection("audit_logs").insertOne({
       action: "payment.rejected", actorId: interaction.user.id, guildId: interaction.guildId,
-      details: { orderId: String(order._id), proofId: String(proof._id), orderCode: order.orderCode }, createdAt: new Date(),
+      details: { orderId: String(order._id), proofId: String(proof._id), orderCode: order.orderCode },
+      createdAt: new Date(),
     }).catch(() => {});
     return;
   }
