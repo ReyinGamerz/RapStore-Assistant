@@ -27,25 +27,40 @@ test("category selection updates the original catalog message", () => {
   assert.equal(category.includes("await interaction.deferReply("), false);
 });
 
-test("product selection updates the original catalog message and keeps errors separate", () => {
+test("product selection keeps the public catalog and opens a separate ephemeral confirmation", () => {
   const product = section(
     'if (interaction.customId === "rapstore:catalog:product")',
-    'if (interaction.customId === "rapstore:catalog:ticket")',
+    "\n}\n\nasync function createCatalogOrderTicket",
   );
   assert.match(product, /await interaction\.deferUpdate\(\)/);
   assert.match(product, /await interaction\.editReply\(await buildCatalogPayload\(category, id\)\)/);
-  assert.doesNotMatch(product, /deferReply/);
-  assert.match(product, /await interaction\.followUp\(payload\)/);
+  assert.match(product, /KONFIRMASI PESANAN/);
+  assert.match(product, /flags: EPHEMERAL \| MessageFlags\.IsComponentsV2/);
+  assert.match(product, /rapstore:catalog:order:confirm:/);
+  assert.match(product, /rapstore:catalog:order:cancel:/);
+  assert.doesNotMatch(product, /rapstore:catalog:ticket/);
 });
 
-test("ticket creation acknowledges the catalog interaction without replacing the catalog", () => {
-  const ticket = section(
-    'if (interaction.customId === "rapstore:catalog:ticket")',
-    "\n  }\n}",
+test("catalog no longer exposes a ticket-destination dropdown", () => {
+  assert.doesNotMatch(source, /rapstore:catalog:ticket/);
+  assert.doesNotMatch(source, /Pilih Tujuan Tiket/);
+  assert.match(source, /\.setCustomId\("rapstore:catalog:category"\)/);
+  assert.match(source, /\.setCustomId\("rapstore:catalog:product"\)/);
+});
+
+test("confirming an order revalidates the product and uses the guarded order-ticket flow", () => {
+  const create = source.slice(
+    source.indexOf("async function createCatalogOrderTicket"),
+    source.indexOf("\nfunction formatPrice", source.indexOf("async function createCatalogOrderTicket")),
   );
-  assert.match(ticket, /await interaction\.deferUpdate\(\)/);
-  assert.match(ticket, /interaction\.followUp\(/);
-  assert.doesNotMatch(ticket, /deferReply/);
+  assert.match(create, /findOne\(\{ _id: new ObjectId\(selectedProductId\), active: true \}\)/);
+  assert.match(create, /insertOne\(\{ guildId: interaction\.guildId, buyerId: interaction\.user\.id, interactionId: interaction\.id/);
+  assert.match(create, /allocateTicketNumber\("order"\)/);
+  assert.match(create, /initializeOrderTicket\(/);
+  assert.match(create, /await interaction\.editReply\(payload\)/);
+  assert.match(source, /async function handleCatalogOrderButton\(interaction\)[\s\S]*?action === "cancel"[\s\S]*?await interaction\.deleteReply\(\)/);
+  assert.match(source, /action !== "confirm" \|\| !productId/);
+  assert.match(source, /await createCatalogOrderTicket\(interaction, productId\)/);
 });
 
 test("catalog is staff-published and the founder panel remains ephemeral", () => {
@@ -53,7 +68,6 @@ test("catalog is staff-published and the founder panel remains ephemeral", () =>
   assert.match(source, /if \(interaction\.commandName === "catalog"\)[\s\S]*?if \(!hasStaffRole\(interaction\.member\)\)/);
   assert.match(source, /await upsertPersistentPanel\(interaction, "catalog", await buildCatalogPayload\(\)\)/);
 });
-
 
 test("catalog uses the requested custom alur and Catalog emojis", () => {
   assert.ok(source.includes("<:alur:1558458209977499740> **Harga:**"));
