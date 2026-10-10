@@ -1,16 +1,21 @@
 import {
   ActionRowBuilder,
+  AttachmentBuilder,
   ButtonBuilder,
   ButtonStyle,
   ContainerBuilder,
   MediaGalleryBuilder,
   MediaGalleryItemBuilder,
   MessageFlags,
+  ModalBuilder,
   SeparatorBuilder,
   SeparatorSpacingSize,
   StringSelectMenuBuilder,
   TextDisplayBuilder,
+  TextInputBuilder,
+  TextInputStyle,
 } from "discord.js";
+import { randomBytes } from "node:crypto";
 import { ObjectId } from "mongodb";
 import { config } from "./config.js";
 import { getDatabase } from "./database.js";
@@ -80,6 +85,34 @@ async function productsInCategory(category) {
     : { active: true, category };
   return getDatabase().collection("products").find(filter).sort({ name: 1 }).limit(25).toArray();
 }
+
+function parseSelectEmoji(value) {
+  const text = clean(value, 100);
+  const match = text.match(/^<(a?):([a-zA-Z0-9_]{2,32}):(\d{17,20})>$/);
+  if (match) return { name: match[2], id: match[3], animated: match[1] === "a" };
+  if (text && !text.includes("<") && !text.includes(">")) return { name: text };
+  return null;
+}
+
+async function categoryEmojiMap(names) {
+  if (!names.length) return new Map();
+  const db = getDatabase();
+  const [records, products] = await Promise.all([
+    db.collection("categories").find({ name: { $in: names } }).toArray(),
+    db.collection("products").find({ active: true, category: { $in: names }, categoryEmoji: { $exists: true, $ne: "" } }).toArray(),
+  ]);
+  const map = new Map();
+  for (const record of records) {
+    const emoji = parseSelectEmoji(record.emoji);
+    if (emoji) map.set(record.name, emoji);
+  }
+  for (const product of products) {
+    if (map.has(product.category)) continue;
+    const emoji = parseSelectEmoji(product.categoryEmoji);
+    if (emoji) map.set(product.category, emoji);
+  }
+  return map;
+}
 function makeSelect(customId, placeholder, options, disabled = false) {
   const menu = new StringSelectMenuBuilder().setCustomId(customId).setPlaceholder(placeholder.slice(0, 150)).setMinValues(1).setMaxValues(1);
   if (options.length) menu.addOptions(options.slice(0, 25));
@@ -91,6 +124,7 @@ function makeSelect(customId, placeholder, options, disabled = false) {
 async function buildOrderPanel(order) {
   const categories = await orderCategories();
   const products = await productsInCategory(order.category);
+  const categoryEmojis = await categoryEmojiMap(categories);
   const locked = order.status !== "ON HOLD" || ["verified", "pending_review"].includes(order.paymentStatus);
   const container = new ContainerBuilder();
   container.addTextDisplayComponents(new TextDisplayBuilder().setContent("## 🛒 PESANAN " + clean(order.orderCode, 40)));
@@ -107,19 +141,29 @@ async function buildOrderPanel(order) {
     (order.paymentStatus === "rejected" ? "\n**Pembayaran:** Bukti ditolak, silakan kirim ulang" : ""),
   ));
   divider(container);
-  const categoryOptions = categories.map(name => ({
-    label: name.slice(0, 100), value: name, description: ("Pilih kategori " + name).slice(0, 100),
-    default: Boolean(order.category) && name === order.category,
-  }));
+  const categoryOptions = categories.map(name => {
+    const option = {
+      label: name.slice(0, 100), value: name, description: ("Pilih kategori " + name).slice(0, 100),
+      default: Boolean(order.category) && name === order.category,
+    };
+    const emoji = categoryEmojis.get(name);
+    if (emoji) option.emoji = emoji;
+    return option;
+  });
   container.addActionRowComponents(new ActionRowBuilder().addComponents(
     makeSelect("rapstore:order:category", order.category ? "Kategori: " + order.category : "Pilih Kategori", categoryOptions, locked),
   ));
-  const productOptions = products.map(product => ({
-    label: clean(product.name, 100) || "Produk",
-    value: String(product._id),
-    description: (price(product.price) + " • pilih produk ini").slice(0, 100),
-    default: Boolean(order.productId) && String(product._id) === order.productId,
-  }));
+  const productOptions = products.map(product => {
+    const option = {
+      label: clean(product.name, 100) || "Produk",
+      value: String(product._id),
+      description: (price(product.price) + " • pilih produk ini").slice(0, 100),
+      default: Boolean(order.productId) && String(product._id) === order.productId,
+    };
+    const emoji = parseSelectEmoji(product.emoji);
+    if (emoji) option.emoji = emoji;
+    return option;
+  });
   container.addActionRowComponents(new ActionRowBuilder().addComponents(
     makeSelect("rapstore:order:product", order.productName ? clean(order.productName, 140) : "Pilih Produk", productOptions, locked || !order.category),
   ));
@@ -195,6 +239,237 @@ async function refreshOrderMessage(order, client) {
   if (!channel) return;
   const message = await channel.messages.fetch(order.orderMessageId).catch(() => null);
   if (message) await message.edit(await buildOrderPanel(order));
+}
+
+function buildDonePanel(order, vouchSubmitted = false) {
+  const panel = buildPanel("PESANAN SELESAI",
+    "Pesanan **" + clean(order.orderCode, 40) + "** sudah berstatus **DONE**.\n" +
+    (vouchSubmitted ? "Testimoni lu sudah tercatat. Terima kasih!" :
+      "Klik **VOUCH** untuk mengirim testimoni dalam 1 jam. Jika tidak dikirim, sistem akan menerbitkan vouch otomatis setelah 1 jam."));
+  panel.addActionRowComponents(new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId("rapstore:vouch:open:" + String(order._id))
+      .setLabel(vouchSubmitted ? "VOUCH TERKIRIM" : "VOUCH")
+      .setStyle(vouchSubmitted ? ButtonStyle.Secondary : ButtonStyle.Success).setDisabled(vouchSubmitted),
+  ));
+  return v2(panel);
+}
+
+async function markOrderDone(order, actorId, channel, client) {
+  const now = new Date();
+  const autoCloseAt = new Date(now.getTime() + 60 * 60 * 1000);
+  const result = await getDatabase().collection("orders").updateOne(
+    { _id: order._id, status: "PROSES" },
+    { $set: { status: "DONE", completedAt: now, completedBy: actorId, autoCloseAt, updatedAt: now } },
+  );
+  if (!result.modifiedCount) return null;
+  let updated = await getDatabase().collection("orders").findOne({ _id: order._id });
+  await refreshOrderMessage(updated, client).catch(error => console.error("[order-done-panel]", error?.message || error));
+  const doneMessage = await channel.send(buildDonePanel(updated)).catch(error => {
+    console.error("[order-done-vouch-panel]", error?.message || error);
+    return null;
+  });
+  if (doneMessage) {
+    await getDatabase().collection("orders").updateOne({ _id: order._id }, { $set: { doneMessageId: doneMessage.id, updatedAt: new Date() } });
+    updated = { ...updated, doneMessageId: doneMessage.id };
+  }
+  await getDatabase().collection("audit_logs").insertOne({
+    action: "order.completed", actorId, guildId: order.guildId,
+    details: { orderId: String(order._id), orderCode: order.orderCode, autoCloseAt }, createdAt: new Date(),
+  }).catch(() => {});
+  return updated;
+}
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, character => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  })[character]);
+}
+
+function componentTranscriptText(components, depth = 0) {
+  if (!Array.isArray(components) || depth > 8) return [];
+  const output = [];
+  for (const component of components) {
+    if (component?.content) output.push(String(component.content));
+    if (component?.description) output.push(String(component.description));
+    if (component?.components) output.push(...componentTranscriptText(component.components, depth + 1));
+    if (component?.items) output.push(...componentTranscriptText(component.items, depth + 1));
+    if (component?.accessory) output.push(...componentTranscriptText([component.accessory], depth + 1));
+  }
+  return output;
+}
+
+function transcriptSuffix() {
+  let value = "";
+  while (value.length < 5) value += randomBytes(8).toString("base64url").replace(/[^a-zA-Z0-9]/g, "");
+  return value.slice(0, 5);
+}
+
+export async function archiveAndDeleteTicket({ channel, ticket, client, closedBy = null, reason = "ticket_closed" }) {
+  if (!channel || !ticket) throw new Error("Ticket channel and database record are required to archive.");
+  const archiveId = clean(config.transcriptChannelId, 30);
+  if (!archiveId) throw new Error("TRANSCRIPT_CHANNEL_ID is not configured; ticket deletion is blocked to prevent transcript loss.");
+  const archiveChannel = await client.channels.fetch(archiveId).catch(() => null);
+  if (!archiveChannel || typeof archiveChannel.send !== "function") throw new Error("TRANSCRIPT_CHANNEL_ID is not a sendable channel.");
+
+  const messages = [];
+  let before;
+  while (true) {
+    const batch = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
+    if (!batch.size) break;
+    messages.push(...batch.values());
+    before = batch.last().id;
+    if (batch.size < 100) break;
+  }
+  messages.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+  const rows = messages.map(message => {
+    const author = message.author?.tag || message.author?.username || "Unknown";
+    const text = [message.content, ...componentTranscriptText(message.components)].filter(Boolean).join("\n\n");
+    const attachments = [...(message.attachments?.values?.() || [])].map(file =>
+      '<li><a href="' + escapeHtml(file.url) + '">' + escapeHtml(file.name || "attachment") + '</a></li>'
+    ).join("");
+    const body = text ? '<pre>' + escapeHtml(text) + '</pre>' : "";
+    return '<article><header><strong>' + escapeHtml(author) + '</strong> <time>' +
+      escapeHtml(new Date(message.createdTimestamp).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })) +
+      '</time></header>' + body + (attachments ? '<ul>' + attachments + '</ul>' : "") + '</article>';
+  }).join("\n");
+  const html = '<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>RapStore Ticket Transcript</title><style>body{font:14px system-ui,sans-serif;background:#111827;color:#e5e7eb;margin:0;padding:24px}h1{font-size:22px}p{color:#9ca3af}article{background:#1f2937;border-radius:8px;padding:14px;margin:12px 0;overflow-wrap:anywhere}header{display:flex;gap:12px;justify-content:space-between;border-bottom:1px solid #374151;padding-bottom:8px}time{color:#9ca3af;font-size:12px}pre{white-space:pre-wrap;font:inherit;margin:12px 0}a{color:#93c5fd}</style></head><body><h1>RapStore — Ticket Transcript</h1><p>Channel: ' +
+    escapeHtml(channel.name) + ' • Ticket: ' + escapeHtml(ticket.ticketPrefix ? ticket.ticketPrefix + "-" + ticket.ticketNumber : channel.name) +
+    ' • Closed by: ' + escapeHtml(closedBy || "system") + ' • Reason: ' + escapeHtml(reason) + '</p>' + rows + '</body></html>';
+  const baseName = clean(ticket.ticketPrefix && Number.isInteger(ticket.ticketNumber)
+    ? ticket.ticketPrefix + "-" + ticket.ticketNumber : channel.name.replace(/^closed-/, ""), 80).replace(/[^a-zA-Z0-9_-]/g, "-");
+  const filename = baseName + "-#" + transcriptSuffix() + ".html";
+  const archivedMessage = await archiveChannel.send({
+    content: "Transcript tiket **" + baseName + "** • " + messages.length + " pesan • ditutup oleh " + (closedBy ? "<@" + closedBy + ">" : "sistem") + ".",
+    files: [new AttachmentBuilder(Buffer.from(html, "utf8"), { name: filename })],
+    allowedMentions: { parse: [], users: [], roles: [] },
+  });
+  await getDatabase().collection("tickets").updateOne(
+    { _id: ticket._id, status: { $in: ["open", "closing"] } },
+    { $set: {
+      status: "closed", closedAt: new Date(), closedBy, closeReason: reason,
+      transcriptFileName: filename, transcriptChannelId: archiveChannel.id, transcriptMessageId: archivedMessage.id,
+    } },
+  );
+  await channel.delete("RapStore ticket archived as " + filename);
+  return { filename, messageId: archivedMessage.id, messageCount: messages.length };
+}
+
+async function publishPendingVouches(client) {
+  const db = getDatabase();
+  const pending = await db.collection("vouches").find({ status: "pending_publish" }).sort({ createdAt: 1 }).limit(20).toArray();
+  for (const vouch of pending) {
+    try {
+      if (!config.vouchChannelId) throw new Error("VOUCH_CHANNEL_ID is not configured.");
+      const channel = await client.channels.fetch(config.vouchChannelId).catch(() => null);
+      if (!channel || typeof channel.send !== "function") throw new Error("VOUCH_CHANNEL_ID is not a sendable channel.");
+      const rating = Math.max(1, Math.min(5, Number(vouch.rating) || 5));
+      const stars = "★".repeat(rating) + "☆".repeat(5 - rating);
+      const message = clean(vouch.message || "vouch otomatis setelah 1 jam.", 700).replace(/\r/g, "");
+      const quotedMessage = message.split("\n").map(line => "> " + line).join("\n");
+      const date = new Date(vouch.createdAt || Date.now()).toLocaleDateString("id-ID", {
+        timeZone: "Asia/Jakarta", day: "numeric", month: "long", year: "numeric",
+      });
+      const panel = new ContainerBuilder();
+      panel.addTextDisplayComponents(new TextDisplayBuilder().setContent("## RAP — CUSTOMER TESTIMONI\n-# VERIFIED TRANSACTION"));
+      divider(panel);
+      panel.addTextDisplayComponents(new TextDisplayBuilder().setContent(
+        "**CLIENT**\n<@" + vouch.buyerId + ">\n\n**PRODUCT**\n" + clean(vouch.productName || "Produk RapStore", 100),
+      ));
+      divider(panel);
+      panel.addTextDisplayComponents(new TextDisplayBuilder().setContent(
+        "**RATING**\n" + stars + " (" + rating + "/5)\n\n**PESAN & KESAN**\n" + quotedMessage,
+      ));
+      divider(panel);
+      panel.addTextDisplayComponents(new TextDisplayBuilder().setContent(
+        "> Thank you for trusting **RapStore**.\n\n-# Trusted. Fast. Secure. Professional.\n-# RAP TESTIMONI • " + date,
+      ));
+      const sent = await channel.send({
+        flags: V2, components: [panel],
+        allowedMentions: { parse: [], users: [], roles: [] },
+      });
+      await db.collection("vouches").updateOne(
+        { _id: vouch._id, status: "pending_publish" },
+        { $set: { status: "published", publishedAt: new Date(), publishedMessageId: sent.id } },
+      );
+      await db.collection("orders").updateOne({ _id: new ObjectId(vouch.orderId) }, {
+        $set: { vouchPublishedAt: new Date(), updatedAt: new Date() },
+      });
+      const order = await db.collection("orders").findOne({ _id: new ObjectId(vouch.orderId) });
+      if (order?.doneMessageId) {
+        const doneChannel = await client.channels.fetch(order.channelId).catch(() => null);
+        const doneMessage = doneChannel ? await doneChannel.messages.fetch(order.doneMessageId).catch(() => null) : null;
+        if (doneMessage) await doneMessage.edit(buildDonePanel(order, true)).catch(() => {});
+      }
+    } catch (error) {
+      console.error("[vouch-publish]", error?.message || error);
+    }
+  }
+}
+
+let maintenanceRunning = false;
+async function runOrderMaintenance(client) {
+  if (maintenanceRunning) return;
+  maintenanceRunning = true;
+  try {
+    const db = getDatabase();
+    await publishPendingVouches(client);
+    const now = new Date();
+    const dueOrders = await db.collection("orders").find({
+      status: "DONE", autoCloseAt: { $lte: now }, ticketClosedAt: { $exists: false },
+    }).sort({ autoCloseAt: 1 }).limit(20).toArray();
+    for (const candidate of dueOrders) {
+      const claimed = await db.collection("orders").updateOne({
+        _id: candidate._id, status: "DONE", ticketClosedAt: { $exists: false },
+        $or: [{ closeProcessingAt: { $exists: false } }, { closeProcessingAt: { $lt: new Date(Date.now() - 5 * 60 * 1000) } }],
+      }, { $set: { closeProcessingAt: new Date() } });
+      if (!claimed.modifiedCount) continue;
+      try {
+        let vouch = await db.collection("vouches").findOne({ orderId: String(candidate._id) });
+        if (!vouch) {
+          try {
+            const inserted = await db.collection("vouches").insertOne({
+              orderId: String(candidate._id), orderCode: candidate.orderCode, guildId: candidate.guildId,
+              channelId: candidate.channelId, buyerId: candidate.buyerId, productName: candidate.productName || "Produk RapStore",
+              rating: 5, message: "vouch otomatis setelah 1 jam.", automatic: true,
+              status: "pending_publish", createdAt: new Date(candidate.autoCloseAt || now),
+            });
+            vouch = await db.collection("vouches").findOne({ _id: inserted.insertedId });
+          } catch (error) {
+            if (error?.code !== 11000) throw error;
+            vouch = await db.collection("vouches").findOne({ orderId: String(candidate._id) });
+          }
+        }
+        await publishPendingVouches(client);
+        vouch = await db.collection("vouches").findOne({ orderId: String(candidate._id) });
+        if (!vouch?.publishedAt) throw new Error("Vouch belum berhasil dikirim; ticket tetap dibiarkan agar tidak kehilangan alur.");
+        const guild = await client.guilds.fetch(candidate.guildId).catch(() => null);
+        const channel = guild ? await guild.channels.fetch(candidate.channelId).catch(() => null) : null;
+        const ticket = await db.collection("tickets").findOne({ guildId: candidate.guildId, channelId: candidate.channelId });
+        if (channel && ticket && ticket.status !== "closed") {
+          await archiveAndDeleteTicket({ channel, ticket, client, closedBy: "system", reason: "order_done_auto_close" });
+        } else if (!channel && ticket && ticket.status === "open") {
+          await db.collection("tickets").updateOne({ _id: ticket._id, status: "open" }, {
+            $set: { status: "deleted", closedAt: new Date(), closeReason: "channel_missing_before_auto_close" },
+          });
+        }
+        await db.collection("orders").updateOne({ _id: candidate._id }, {
+          $set: { ticketClosedAt: new Date(), updatedAt: new Date() }, $unset: { closeProcessingAt: "" },
+        });
+      } catch (error) {
+        await db.collection("orders").updateOne({ _id: candidate._id }, { $unset: { closeProcessingAt: "" } }).catch(() => {});
+        console.error("[order-auto-close]", candidate.orderCode, error?.message || error);
+      }
+    }
+  } finally {
+    maintenanceRunning = false;
+  }
+}
+
+export function startOrderMaintenance(client) {
+  const run = () => void runOrderMaintenance(client).catch(error => console.error("[order-maintenance]", error?.message || error));
+  run();
+  const timer = setInterval(run, 30_000);
+  timer.unref?.();
 }
 
 export async function initializeOrderTicket({ channel, interaction, ticketNumber, ticketId, selectedProduct }) {
