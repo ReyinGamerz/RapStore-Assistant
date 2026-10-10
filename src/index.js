@@ -909,6 +909,7 @@ async function handleInteraction(interaction) {
   if (interaction.commandName === "panel") { await showFounderPanel(interaction); return; }
   if (interaction.commandName === "catalog") {
     if (!interaction.inGuild()) { await interaction.reply(v2Payload({ content: "Katalog publik hanya bisa dibuat di channel server.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 })); return; }
+    if (!hasStaffRole(interaction.member)) { await interaction.reply(v2Payload({ content: "Command /catalog hanya untuk Founder/Admin. Member cukup menggunakan pesan katalog publik yang sudah tersedia.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 })); return; }
     await upsertPersistentPanel(interaction, "catalog", await buildCatalogPayload());
   }
 }
