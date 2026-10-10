@@ -370,6 +370,7 @@ async function handleFounderPanelButton(interaction) {
     }
     const removedProducts = await db.collection("products").deleteMany({category:name});
     await db.collection("categories").deleteOne({_id:new ObjectId(categoryId)});
+    await refreshPersistentPanels(client, "catalog");
     await audit("category.deleted",interaction,{category:name,deletedProducts:removedProducts.deletedCount});
     await interaction.editReply(v2Payload({content:"Kategori **"+name+"** dihapus beserta **"+removedProducts.deletedCount+" produk** di dalamnya.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
     return;
@@ -382,6 +383,7 @@ async function handleFounderPanelButton(interaction) {
     const product = await db.collection("products").findOne({_id:new ObjectId(id)});
     if (!product) { await interaction.editReply(v2Payload({content:"Produk tidak ditemukan atau sudah dihapus.",flags:EPHEMERAL|MessageFlags.IsComponentsV2})); return; }
     await db.collection("products").deleteOne({_id:new ObjectId(id)});
+    await refreshPersistentPanels(client, "catalog");
     await audit("product.deleted",interaction,{productId:id,productName:product.name,category:product.category||"Umum"});
     await interaction.editReply(v2Payload({content:"Produk **"+safeText(product.name,100)+"** berhasil dihapus.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
     return;
@@ -499,6 +501,7 @@ async function handleFounderPanelModal(interaction) {
         return;
       }
       await collection.insertOne({name,emoji,createdAt:new Date(),createdBy:interaction.user.id});
+      await refreshPersistentPanels(client, "catalog");
       await audit("category.created",interaction,{category:name});
       await interaction.editReply(v2Payload({content:"Kategori **"+(emoji?emoji+" ":"")+name+"** berhasil dibuat.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
       return;
@@ -528,6 +531,7 @@ async function handleFounderPanelModal(interaction) {
     } else {
       await db.collection("products").updateMany({category:name},{$set:{categoryEmoji:emoji,updatedAt:new Date()}});
     }
+    await refreshPersistentPanels(client, "catalog");
     await audit("category.updated",interaction,{oldName,name});
     await interaction.editReply(v2Payload({content:"Kategori berhasil diperbarui.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
     return;
@@ -559,6 +563,7 @@ async function handleFounderPanelModal(interaction) {
   if (action === "add") {
     const now = new Date();
     const result = await db.collection("products").insertOne({name,price,category,emoji,description,active:true,currency:"IDR",createdAt:now,updatedAt:now,createdBy:interaction.user.id});
+    await refreshPersistentPanels(client, "catalog");
     await audit("product.created",interaction,{productId:String(result.insertedId),category,source:"panel"});
     await interaction.editReply(v2Payload({content:"Produk berhasil dibuat dalam kategori **"+category+"**. ID: "+result.insertedId,flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
     return;
@@ -578,6 +583,7 @@ async function handleFounderPanelModal(interaction) {
     await interaction.editReply(v2Payload({content:"Produk tidak ditemukan.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
     return;
   }
+  await refreshPersistentPanels(client, "catalog");
   await audit("product.updated",interaction,{productId:id,category,source:"panel"});
   await interaction.editReply(v2Payload({content:"Produk berhasil diperbarui. Kategori sekarang: **"+category+"**.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
 }
