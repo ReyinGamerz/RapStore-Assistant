@@ -50,7 +50,6 @@ async function getProductCategories() {
   const map = new Map();
   for (const item of saved) if (item.name) map.set(safeText(item.name,80), safeText(item.emoji || "",100));
   for (const value of values) if (value) { const name=safeText(value,80); if (!map.has(name)) map.set(name,""); }
-  if (!map.has("Umum")) map.set("Umum","");
   return [...map.entries()].sort((a,b)=>a[0].localeCompare(b[0])).slice(0,25).map(([name,emoji])=>({name,emoji}));
 }
 function parseDiscordEmoji(value) {
@@ -268,13 +267,12 @@ async function handleFounderPanelButton(interaction) {
   }
   if (action === "confirmdeletecategory") {
     const categoryId = parts[3] || "";
-    await interaction.deferReply({flags:EPHEMERAL|MessageFlags.IsComponentsV2});
+    await interaction.deferUpdate();
     const {ObjectId}=await import("mongodb");
     if (!ObjectId.isValid(categoryId)) { await interaction.editReply(v2Payload({content:"Kategori tidak valid.",flags:EPHEMERAL|MessageFlags.IsComponentsV2})); return; }
     const categoryRecord = await db.collection("categories").findOne({_id:new ObjectId(categoryId)});
     if (!categoryRecord) { await interaction.editReply(v2Payload({content:"Kategori tidak ditemukan atau sudah dihapus.",flags:EPHEMERAL|MessageFlags.IsComponentsV2})); return; }
     const name = categoryRecord.name;
-    if (name === "Umum") { await interaction.editReply(v2Payload({content:"Kategori Umum adalah kategori bawaan dan tidak bisa dihapus. Pindahkan produknya ke kategori lain terlebih dahulu.",flags:EPHEMERAL|MessageFlags.IsComponentsV2})); return; }
     const removedProducts = await db.collection("products").deleteMany({category:name});
     await db.collection("categories").deleteOne({_id:new ObjectId(categoryId)});
     await audit("category.deleted",interaction,{category:name,deletedProducts:removedProducts.deletedCount});
@@ -283,7 +281,7 @@ async function handleFounderPanelButton(interaction) {
   }
   if (action === "confirmdeleteproduct") {
     const id = parts[3] || "";
-    await interaction.deferReply({flags:EPHEMERAL|MessageFlags.IsComponentsV2});
+    await interaction.deferUpdate();
     const {ObjectId}=await import("mongodb");
     if (!ObjectId.isValid(id)) { await interaction.editReply(v2Payload({content:"ID produk tidak valid.",flags:EPHEMERAL|MessageFlags.IsComponentsV2})); return; }
     const product = await db.collection("products").findOne({_id:new ObjectId(id)});
@@ -294,7 +292,8 @@ async function handleFounderPanelButton(interaction) {
     return;
   }
   if (action === "canceldeletecategory" || action === "canceldeleteproduct") {
-    await interaction.update(v2Payload({content:"Penghapusan dibatalkan.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
+    await interaction.deferUpdate();
+    await interaction.deleteReply();
   }
 }
 async function handleFounderPanelSelect(interaction) {
@@ -322,19 +321,14 @@ async function handleFounderPanelSelect(interaction) {
   }
   if (mode === "deletecategorymanage") {
     const name = decodeCategory(interaction.values[0]);
-    await interaction.deferUpdate();
     if (!name) {
-      await interaction.followUp(v2Payload({content:"Kategori tidak valid.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
-      return;
-    }
-    if (name === "Umum") {
-      await interaction.followUp(v2Payload({content:"Kategori Umum adalah kategori bawaan dan tidak bisa dihapus.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
+      await interaction.update(v2Payload({content:"Kategori tidak valid.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
       return;
     }
     const category = (await getProductCategories()).find(item => item.name === name);
     const record = await ensureCategoryRecord(name, category?.emoji || "");
     const count = await getDatabase().collection("products").countDocuments({category:name});
-    await interaction.followUp(buildDeleteConfirmation(
+    await interaction.update(buildDeleteConfirmation(
       "KONFIRMASI HAPUS KATEGORI",
       "Kategori **"+name+"** akan dihapus bersama **"+count+" produk** di dalamnya. Tindakan ini tidak bisa dibatalkan.",
       "rapstore:panel:confirmdeletecategory:"+String(record._id),
@@ -362,17 +356,16 @@ async function handleFounderPanelSelect(interaction) {
   }
   if (mode === "deleteproduct") {
     const id = interaction.values[0];
-    await interaction.deferUpdate();
     if (!ObjectId.isValid(id)) {
-      await interaction.followUp(v2Payload({content:"ID produk tidak valid.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
+      await interaction.update(v2Payload({content:"ID produk tidak valid.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
       return;
     }
     const product = await getDatabase().collection("products").findOne({_id:new ObjectId(id)});
     if (!product) {
-      await interaction.followUp(v2Payload({content:"Produk tidak ditemukan.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
+      await interaction.update(v2Payload({content:"Produk tidak ditemukan atau sudah dihapus.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
       return;
     }
-    await interaction.followUp(buildDeleteConfirmation(
+    await interaction.update(buildDeleteConfirmation(
       "KONFIRMASI HAPUS PRODUK",
       "Produk **"+safeText(product.name,100)+"** akan dihapus dari katalog. Tindakan ini tidak bisa dibatalkan.",
       "rapstore:panel:confirmdeleteproduct:"+id,
