@@ -484,7 +484,7 @@ async function archiveTicketImages(archiveChannel, messages, ticket, archiveKey,
   // Reuse all images already copied during an interrupted archive attempt.
   const markerLookup = photos.map(photo => ({
     legacy: "[archive-photo-key:" + photo.marker + "]",
-    hidden: encodeInvisibleMarker("[archive-photo-key:" + photo.marker + "]"),
+    hidden: encodeInvisibleMarker(photo.token),
     photo,
   }));
   let before;
@@ -524,7 +524,7 @@ async function archiveTicketImages(archiveChannel, messages, ticket, archiveKey,
       const name = clean(photo.attachment.name || "foto-tiket.png", 150).replace(/[\\/]/g, "_");
       return { attachment: photo.attachment.url, name: "rap-" + photo.token + "-" + name };
     });
-    const markers = group.map(photo => encodeInvisibleMarker("[archive-photo-key:" + photo.marker + "]")).join("");
+    const markers = group.map(photo => encodeInvisibleMarker(photo.token)).join("");
     const archivedMessage = await archiveChannel.send({
       content: "Foto tiket #" + baseName + " • " + group.length + " foto" + markers,
       files,
