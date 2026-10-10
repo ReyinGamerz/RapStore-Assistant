@@ -767,7 +767,7 @@ async function publishPendingVouches(client) {
       if (!channel || typeof channel.send !== "function") throw new Error("VOUCH_CHANNEL_ID is not a sendable channel.");
       const rating = Math.max(1, Math.min(5, Number(vouch.rating) || 5));
       const stars = "★".repeat(rating) + "☆".repeat(5 - rating);
-      const message = clean(vouch.message || "vouch otomatis setelah 1 jam. (ini jika user ga send vouch)", 700).replace(/\r/g, "");
+      const message = clean(vouch.message || "vouch otomatis setelah 1 jam.", 700).replace(/\r/g, "");
       const quotedMessage = message.split("\n").map(line => "> " + line).join("\n");
       const date = new Date(vouch.createdAt || Date.now()).toLocaleDateString("en-GB", {
         timeZone: "Asia/Jakarta", day: "2-digit", month: "short", year: "numeric",
@@ -1076,7 +1076,7 @@ export async function handleOrderInteraction(interaction, client) {
         });
       } catch (error) {
         if (error?.code !== 11000) throw error;
-        await replyNotice(interaction, "VOUCH SUDAH DICATAT", "Testimoni untuk transaksi ini sudah tercatat.");
+        await interaction.editReply(v2(buildPanel("VOUCH SUDAH DICATAT", "Testimoni untuk transaksi ini sudah tercatat."), true));
         return;
       }
       await publishPendingVouches(client);
