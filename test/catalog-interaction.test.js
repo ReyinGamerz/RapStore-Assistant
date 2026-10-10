@@ -28,13 +28,14 @@ test("category selection updates the original catalog message", () => {
   assert.equal(category.includes("await interaction.deferReply("), false);
 });
 
-test("product selection keeps the public catalog and opens a separate ephemeral confirmation", () => {
+test("product selection leaves the public catalog unchanged and opens a separate ephemeral confirmation", () => {
   const product = section(
     'if (interaction.customId === "rapstore:catalog:product")',
     "\n}\n\nasync function handleCatalogPageButton",
   );
   assert.match(product, /await interaction\.deferUpdate\(\)/);
-  assert.match(product, /await interaction\.editReply\(await buildCatalogPayload\(category, id\)\)/);
+  assert.doesNotMatch(product, /editReply\(await buildCatalogPayload\(category, id\)\)/);
+  assert.match(product, /Number\.isSafeInteger\(unitPrice\) \|\| unitPrice < 1/);
   assert.match(product, /KONFIRMASI PESANAN/);
   assert.match(product, /flags: EPHEMERAL \| MessageFlags\.IsComponentsV2/);
   assert.match(product, /rapstore:catalog:order:confirm:/);
