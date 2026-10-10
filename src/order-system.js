@@ -18,6 +18,7 @@ import {
 import { randomBytes } from "node:crypto";
 import { ObjectId } from "mongodb";
 import { config } from "./config.js";
+import { persistTicketAttachments } from "./cloud-storage.js";
 import { getDatabase } from "./database.js";
 import { buildPanel } from "./ui.js";
 
@@ -448,6 +449,8 @@ export async function archiveAndDeleteTicket({ channel, ticket, client, closedBy
       if (batch.size < 100) break;
     }
     messages.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+    // Persist attachments before rendering/uploading the transcript. If cloud upload fails, keep the ticket intact.
+    const persistentAttachmentUrls = await persistTicketAttachments(messages, ticket);
     const messageById = new Map(messages.map(message => [message.id, message]));
     const rows = messages.map(message => {
       const author = message.member?.displayName || message.author?.globalName || message.author?.username || "Unknown";
@@ -474,7 +477,7 @@ export async function archiveAndDeleteTicket({ channel, ticket, client, closedBy
         : "";
       const embeds = [...(message.embeds || [])].map(renderTranscriptEmbed).join("");
       const attachments = [...(message.attachments?.values?.() || [])].map(file => {
-        const url = safeHttpUrl(file.url);
+        const url = safeHttpUrl(persistentAttachmentUrls.get(file.url) || file.url);
         const name = file.name || "attachment";
         const type = String(file.contentType || "").toLowerCase();
         const isImage = type.startsWith("image/") || /\.(png|jpe?g|gif|webp|avif|bmp)$/i.test(name);
