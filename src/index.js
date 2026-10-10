@@ -666,13 +666,13 @@ async function buildCatalogPayload(selectedCategory = "", selectedProductId = ""
           ? name.replace(/\b(\d+x)\b/g, "`$1`").replace(/\b(\d+)\s+Month\b/gi, "`$1` Month")
           : name;
         lines.push("**" + (safeText(product.emoji,100) ? safeText(product.emoji,100) + " " : "") + displayName + "**");
-        lines.push("<:alur:1553800809198649344> **Harga:** `" + formatPrice(retail).replace(/^Rp\s*/, "Rp") + "`", "");
+        lines.push("<:alur:1558458209977499740> **Harga:** `" + formatPrice(retail).replace(/^Rp\s*/, "Rp") + "`", "");
       }
     }
   }
 
   const panel = buildPanel("");
-  panel.addTextDisplayComponents(new TextDisplayBuilder().setContent("### 🛍️ RAPSTORE — CATALOG"));
+  panel.addTextDisplayComponents(new TextDisplayBuilder().setContent("### <:Catalog:1558470276981850132> RAPSTORE — CATALOG"));
   panel.addSeparatorComponents(new SeparatorBuilder());
   panel.addTextDisplayComponents(new TextDisplayBuilder().setContent(lines.join("\n").slice(0, 3900)));
   panel.addSeparatorComponents(new SeparatorBuilder());
