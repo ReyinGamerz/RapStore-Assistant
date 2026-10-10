@@ -31,9 +31,9 @@ For a new install, run `npm install`, copy `.env.example` to `.env`, then set `D
 - Edit/delete pickers show up to 25 options at a time, matching Discord's select-menu limit.
 
 ## Catalog display
-- Header: `### 🛍️ RAPSTORE — CATALOG`
+- Header: `### <:Catalog:1558470276981850132> RAPSTORE — CATALOG`
 - Category label: `**Category:** Umum`
-- Product names and prices are rendered in bold; Server Boost multipliers and month count are formatted with separate backticks. The custom `alur` emoji appears with one space before **Harga:**.
+- Product names and prices are rendered in bold; Server Boost multipliers and month count are formatted with separate backticks. The custom `alur` emoji (`<:alur:1558458209977499740>`) appears with one space before **Harga:**. The catalog heading uses `<:Catalog:1558470276981850132>`. 
 - Descriptions and reseller pricing are not shown.
 - Products come from the MongoDB `products` collection and only active products are displayed. Add or edit intended products in `/panel` with their correct category and price.
 - The category, product, and ticket-purpose menus remain below the list. `ORDER SEKARANG` creates an order ticket; `TANYA-TANYA DULU` creates a consultation ticket.
