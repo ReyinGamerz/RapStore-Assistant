@@ -22,7 +22,7 @@ Confirmed findings on the audited base:
 - **P2 — No automatic startup validation:** `npm start` launched the bot without running tests or syntax checks first.
 - **P2 — Dependency reproducibility:** the audited repository has no `package-lock.json`, so transitive dependency versions are not pinned.
 
-The audit branch fixes the first four items and adds a regression test for ticket recovery. Those changes remain **pending CI verification**.
+The audit branch fixes the confirmed runtime defects, shared catalog selection behavior, shutdown scheduling, and command/startup architecture described above. Those changes remain **pending CI verification**; dependency reproducibility and live integration remain open or blocked.
 
 ## B. Inventory and coverage
 
