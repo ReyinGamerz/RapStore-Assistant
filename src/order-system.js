@@ -271,7 +271,43 @@ function paymentReviewMessageHasProof(message, proofId) {
   }
 }
 
-async function reconcilePaymentProofStatuses(db) {
+async function replacePaymentReviewNotice(client, proof, title, body) {
+  const messageId = String(proof?.reviewMessageId || "");
+  const channelId = String(proof?.reviewChannelId || proof?.channelId || "");
+  if (!messageId || !channelId) return false;
+  const channel = await client.channels.fetch(channelId).catch(() => null);
+  if (!channel?.messages) return false;
+  const message = await channel.messages.fetch(messageId).catch(() => null);
+  if (!message) return false;
+  try {
+    await message.edit(paymentReviewResultPayload(title, body));
+    return true;
+  } catch (error) {
+    console.error("[payment-review-notice-disable]", error?.message || error);
+    return false;
+  }
+}
+
+async function supersedePendingProofs(db, client, orderId, exceptProofId, reason) {
+  const collection = db.collection("payment_proofs");
+  const previous = await collection.find({
+    orderId: String(orderId),
+    _id: { $ne: exceptProofId },
+    status: "pending",
+  }).toArray();
+  if (!previous.length) return;
+  const now = new Date();
+  await collection.updateMany(
+    { orderId: String(orderId), _id: { $ne: exceptProofId }, status: "pending" },
+    { $set: { status: "superseded", supersededAt: now, supersededReason: reason, updatedAt: now }, $unset: { reviewSendingAt: "" } },
+  ).catch(error => console.error("[payment-proof-supersede]", error?.message || error));
+  for (const prior of previous) {
+    await replacePaymentReviewNotice(client, prior, "BUKTI SUDAH TIDAK AKTIF",
+      "Bukti ini telah digantikan oleh bukti terbaru atau status pesanan sudah berubah.");
+  }
+}
+
+async function reconcilePaymentProofStatuses(db, client) {
   const proofs = await db.collection("payment_proofs").find({ status: "pending" })
     .sort({ createdAt: 1 }).limit(100).toArray();
   for (const proof of proofs) {
@@ -297,75 +333,136 @@ async function reconcilePaymentProofStatuses(db) {
       changes.supersededAt = now;
       changes.supersededReason = !order ? "order_missing" : "order_state_changed";
     }
-    await db.collection("payment_proofs").updateOne(
+    const saved = await db.collection("payment_proofs").updateOne(
       { _id: proof._id, status: "pending" },
-      { $set: changes },
-    ).catch(error => console.error("[payment-proof-reconcile-update]", error?.message || error));
+      { $set: changes, $unset: { reviewSendingAt: "" } },
+    ).catch(error => {
+      console.error("[payment-proof-reconcile-update]", error?.message || error);
+      return null;
+    });
+    if (!saved?.modifiedCount) continue;
+
+    const title = targetStatus === "accepted" ? "BUKTI VALID — PESANAN DIPROSES"
+      : targetStatus === "rejected" ? "BUKTI TRANSFER TIDAK VALID"
+        : "BUKTI SUDAH TIDAK AKTIF";
+    const body = targetStatus === "accepted"
+      ? "Pembayaran sudah terverifikasi. Pesanan **" + clean(order?.orderCode, 40) + "** berstatus **PROSES**."
+      : targetStatus === "rejected"
+        ? "Bukti ini ditolak. Pembeli dapat mengirim ulang bukti yang benar; status pesanan tetap **ON HOLD**."
+        : "Bukti ini sudah tidak berlaku. Periksa panel PESANAN untuk status terbaru.";
+    await replacePaymentReviewNotice(client, proof, title, body);
   }
 }
 
 async function ensurePendingPaymentNotices(client, db) {
   const proofs = await db.collection("payment_proofs").find({ status: "pending" })
     .sort({ createdAt: 1 }).limit(100).toArray();
-  for (const proof of proofs) {
-    let order = null;
-    if (ObjectId.isValid(String(proof.orderId || ""))) {
-      order = await db.collection("orders").findOne({
+  const collection = db.collection("payment_proofs");
+
+  for (const initialProof of proofs) {
+    const now = new Date();
+    const claim = await collection.updateOne({
+      _id: initialProof._id,
+      status: "pending",
+      $or: [
+        { reviewSendingAt: { $exists: false } },
+        { reviewSendingAt: { $lt: new Date(Date.now() - 2 * 60 * 1000) } },
+      ],
+    }, { $set: { reviewSendingAt: now } }).catch(error => {
+      console.error("[payment-proof-notice-claim]", error?.message || error);
+      return null;
+    });
+    if (!claim?.modifiedCount) continue;
+
+    let proof = await collection.findOne({ _id: initialProof._id, status: "pending" });
+    if (!proof) continue;
+    try {
+      if (!ObjectId.isValid(String(proof.orderId || ""))) {
+        await collection.updateOne({ _id: proof._id, status: "pending" }, {
+          $set: { status: "superseded", supersededAt: new Date(), supersededReason: "invalid_order_id", updatedAt: new Date() },
+          $unset: { reviewSendingAt: "" },
+        });
+        continue;
+      }
+      let order = await db.collection("orders").findOne({
         _id: new ObjectId(proof.orderId),
         guildId: proof.guildId,
         channelId: proof.channelId,
-      }).catch(error => {
-        console.error("[payment-proof-notice-order]", error?.message || error);
+      });
+      if (expectedProofStatus(proof, order) !== "pending") {
+        await collection.updateOne({ _id: proof._id, status: "pending" }, {
+          $set: { supersededAt: new Date(), supersededReason: "order_state_changed", status: "superseded", updatedAt: new Date() },
+          $unset: { reviewSendingAt: "" },
+        });
+        await replacePaymentReviewNotice(client, proof, "BUKTI SUDAH TIDAK AKTIF",
+          "Bukti ini sudah tidak berlaku. Periksa panel PESANAN untuk status terbaru.");
+        continue;
+      }
+
+      const channel = await client.channels.fetch(String(proof.channelId || "")).catch(error => {
+        if (Number(error?.code) !== 10003) console.error("[payment-proof-notice-channel]", error?.message || error);
         return null;
       });
-    }
-    if (expectedProofStatus(proof, order) !== "pending") continue;
+      if (!channel || typeof channel.send !== "function" || !channel.messages) {
+        await collection.updateOne({ _id: proof._id, status: "pending" }, { $unset: { reviewSendingAt: "" } });
+        continue;
+      }
 
-    const channel = await client.channels.fetch(String(proof.channelId || "")).catch(error => {
-      if (Number(error?.code) !== 10003) console.error("[payment-proof-notice-channel]", error?.message || error);
-      return null;
-    });
-    if (!channel || typeof channel.send !== "function" || !channel.messages) continue;
+      if (proof.reviewMessageId && String(proof.reviewChannelId || proof.channelId) === String(channel.id)) {
+        const existing = await channel.messages.fetch(proof.reviewMessageId).catch(() => null);
+        if (existing && paymentReviewMessageHasProof(existing, proof._id)) {
+          await collection.updateOne({ _id: proof._id, status: "pending" }, {
+            $set: { reviewNotifiedAt: proof.reviewNotifiedAt || new Date() },
+            $unset: { reviewSendingAt: "" },
+          });
+          continue;
+        }
+      }
 
-    if (proof.reviewMessageId && String(proof.reviewChannelId || proof.channelId) === String(channel.id)) {
-      const existing = await channel.messages.fetch(proof.reviewMessageId).catch(() => null);
-      if (existing && paymentReviewMessageHasProof(existing, proof._id)) continue;
-    }
+      let existingNotice = null;
+      let before;
+      for (let page = 0; page < 3 && !existingNotice; page++) {
+        const batch = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) }).catch(error => {
+          console.error("[payment-proof-notice-search]", error?.message || error);
+          return null;
+        });
+        if (!batch?.size) break;
+        existingNotice = batch.find(message => paymentReviewMessageHasProof(message, proof._id)) || null;
+        before = batch.last().id;
+        if (batch.size < 100) break;
+      }
+      if (existingNotice) {
+        await collection.updateOne({ _id: proof._id, status: "pending" }, {
+          $set: { reviewMessageId: existingNotice.id, reviewChannelId: channel.id, reviewNotifiedAt: new Date() },
+          $unset: { reviewSendingAt: "" },
+        });
+        continue;
+      }
 
-    let existingNotice = null;
-    let before;
-    for (let page = 0; page < 3 && !existingNotice; page++) {
-      const batch = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) }).catch(error => {
-        console.error("[payment-proof-notice-search]", error?.message || error);
-        return null;
+      // Re-read both records after the send lock is acquired; stale review cards must not be recreated.
+      proof = await collection.findOne({ _id: proof._id, status: "pending" });
+      order = await db.collection("orders").findOne({
+        _id: new ObjectId(initialProof.orderId),
+        guildId: initialProof.guildId,
+        channelId: initialProof.channelId,
       });
-      if (!batch?.size) break;
-      existingNotice = batch.find(message => paymentReviewMessageHasProof(message, proof._id)) || null;
-      before = batch.last().id;
-      if (batch.size < 100) break;
-    }
-    if (existingNotice) {
-      await db.collection("payment_proofs").updateOne({ _id: proof._id, status: "pending" }, {
-        $set: { reviewMessageId: existingNotice.id, reviewChannelId: channel.id, reviewNotifiedAt: new Date() },
-      }).catch(error => console.error("[payment-proof-notice-save]", error?.message || error));
-      continue;
-    }
+      if (!proof || expectedProofStatus(proof, order) !== "pending") {
+        await collection.updateOne({ _id: initialProof._id }, { $unset: { reviewSendingAt: "" } });
+        continue;
+      }
 
-    // Recheck the order immediately before sending so a stale notice is not recreated.
-    const currentOrder = await db.collection("orders").findOne({
-      _id: new ObjectId(proof.orderId),
-      guildId: proof.guildId,
-      channelId: proof.channelId,
-    }).catch(() => null);
-    if (expectedProofStatus(proof, currentOrder) !== "pending") continue;
-
-    try {
-      const sent = await channel.send(buildPaymentReviewNotice(proof, currentOrder));
-      await db.collection("payment_proofs").updateOne({ _id: proof._id, status: "pending" }, {
-        $set: { reviewMessageId: sent.id, reviewChannelId: channel.id, reviewNotifiedAt: new Date() },
-      });
+      const sent = await channel.send(buildPaymentReviewNotice(proof, order));
+      const saved = await collection.updateOne(
+        { _id: proof._id, status: "pending", reviewSendingAt: now },
+        { $set: { reviewMessageId: sent.id, reviewChannelId: channel.id, reviewNotifiedAt: new Date() }, $unset: { reviewSendingAt: "" } },
+      );
+      if (!saved.modifiedCount) {
+        await replacePaymentReviewNotice(client, proof, "BUKTI SUDAH TIDAK AKTIF",
+          "Status pesanan berubah saat notifikasi dibuat. Periksa panel PESANAN untuk status terbaru.");
+      }
     } catch (error) {
-      console.error("[payment-proof-notice-send]", proof.orderCode, error?.message || error);
+      await collection.updateOne({ _id: initialProof._id, status: "pending" }, { $unset: { reviewSendingAt: "" } }).catch(() => {});
+      console.error("[payment-proof-notice-send]", initialProof.orderCode, error?.message || error);
     }
   }
 }
