@@ -514,6 +514,7 @@ export async function archiveAndDeleteTicket({ channel, ticket, client, closedBy
     messages.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
     const baseName = clean(ticket.ticketPrefix && Number.isInteger(ticket.ticketNumber)
       ? ticket.ticketPrefix + "-" + ticket.ticketNumber : channel.name.replace(/^closed-/, ""), 80).replace(/[^a-zA-Z0-9_-]/g, "-");
+    const ticketCode = clean(ticket.ticketCode || "", 20).replace(/[^a-zA-Z0-9&$!@%+_-]/g, "");
     // Copy image attachments into the transcript channel first, then use those new Discord CDN URLs in the HTML.
     // If any image cannot be archived, keep the original ticket so no proof/photo is lost.
     const archivedImageUrls = await archiveTicketImages(archiveChannel, messages, ticket, archiveKey, baseName);
@@ -593,7 +594,6 @@ export async function archiveAndDeleteTicket({ channel, ticket, client, closedBy
       escapeHtml(new Date().toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })) + ' WIB</span></div></section>' +
       (rows || '<p>Channel ini tidak memiliki pesan yang dapat diarsipkan.</p>') +
       '<div class="footer">Transcript dibuat oleh RapStore Assistant • Tampilan arsip tidak dapat memuat ulang pesan yang sudah dihapus dari Discord.</div></main></body></html>';
-    const ticketCode = clean(ticket.ticketCode || "", 20).replace(/[^a-zA-Z0-9&$!@%+_-]/g, "");
     const filename = ticketCode
       ? baseName + "-" + ticketCode + ".html"
       : baseName + "-#" + transcriptSuffix() + ".html";
