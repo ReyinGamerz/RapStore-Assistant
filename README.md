@@ -20,9 +20,9 @@ For a new install, run `npm install`, copy `.env.example` to `.env`, then set `D
 
 ## Active commands
 - `/catalog` — Founder/Admin-only command to create or sync the public catalog message.
-- `/panel` — Founder/Admin-only command to create or sync the public management panel. Members only use the existing public messages; they cannot invoke these commands.
+- `/panel` — Founder/Admin-only command. It opens a private (ephemeral) management panel visible only to the staff member who invoked it; it never posts a public management panel.
 - Slash commands are registered for `DISCORD_GUILD_ID` only, and guild command permissions allow only `FOUNDER_ROLE_ID` and `ADMIN_ROLE_ID`. Old global copies are removed during deployment.
-- The bot stores each server’s catalog/panel message and refreshes them on startup so existing messages use the latest code. Catalog data is also refreshed after category/product changes made through `/panel`.
+- The bot stores and refreshes the public catalog message on startup. Any legacy public management-panel message created by an older version is deleted during startup cleanup. Catalog data is refreshed after category/product changes made through the private `/panel`.
 - Ticket creation shows a temporary “TIKET SEDANG DIBUAT” status before reporting success or failure.
 - **Edit product:** selecting a product opens its edit form directly. Change the category by entering the exact name of an existing category; new or misspelled category names are rejected.
 - **Delete product:** available from the panel and requires confirmation.
