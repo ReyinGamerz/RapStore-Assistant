@@ -295,7 +295,7 @@ async function refreshPersistentPanels(readyClient, onlyType = null) {
         continue;
       }
       const payload = record.type === "catalog"
-        ? await buildCatalogPayload(record.selectedCategory || "", record.selectedProductId || "")
+        ? await buildCatalogPayload("", "")
         : null;
       if (!payload) continue;
       const channel = await readyClient.channels.fetch(record.channelId).catch(() => null);
@@ -727,55 +727,95 @@ async function buildCatalogPayload(selectedCategory = "", selectedProductId = ""
 }
 
 async function handleCatalogSelection(interaction) {
-  await interaction.deferUpdate();
-  const db = getDatabase();
-  const panels = db.collection("persistent_panels");
-  if (interaction.customId === "rapstore:catalog:category") {
-    const category = safeText(interaction.values[0], 80);
-    await panels.updateOne({ guildId: interaction.guildId, type: "catalog" }, { $set: { selectedCategory: category, selectedProductId: "", updatedAt: new Date() } });
-    await interaction.message.edit(await buildCatalogPayload(category, ""));
+  if (!interaction.inGuild()) {
+    await interaction.reply(v2Payload({
+      content: "Katalog hanya bisa digunakan di server Discord.",
+      flags: EPHEMERAL | MessageFlags.IsComponentsV2,
+    }));
     return;
   }
+
+  const db = getDatabase();
+  // Public catalog interactions create a private copy so one member's choices
+  // cannot change the selections currently displayed to every other member.
+  const fromPublicCatalog = !interaction.message.flags.has(MessageFlags.Ephemeral);
+
+  if (interaction.customId === "rapstore:catalog:category") {
+    const category = safeText(interaction.values[0], 80);
+    if (fromPublicCatalog) {
+      await interaction.deferReply({ flags: EPHEMERAL | MessageFlags.IsComponentsV2 });
+    } else {
+      await interaction.deferUpdate();
+    }
+    await interaction.editReply(await buildCatalogPayload(category, ""));
+    return;
+  }
+
   if (interaction.customId === "rapstore:catalog:product") {
-    const id = interaction.values[0];
+    const id = String(interaction.values[0] || "");
+    if (fromPublicCatalog) {
+      await interaction.deferReply({ flags: EPHEMERAL | MessageFlags.IsComponentsV2 });
+    } else {
+      await interaction.deferUpdate();
+    }
     if (id === "none") {
-      await interaction.followUp(v2Payload({ content: "Pilih kategori terlebih dahulu, lalu pilih produk.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
+      const payload = v2Payload({
+        content: "Pilih kategori terlebih dahulu, lalu pilih produk.",
+        flags: EPHEMERAL | MessageFlags.IsComponentsV2,
+      });
+      if (fromPublicCatalog) await interaction.editReply(payload);
+      else await interaction.followUp(payload);
       return;
     }
     if (!ObjectId.isValid(id)) {
-      await interaction.followUp(v2Payload({ content: "Produk tidak valid. Silakan pilih ulang.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
+      const payload = v2Payload({
+        content: "Produk tidak valid. Silakan pilih ulang.",
+        flags: EPHEMERAL | MessageFlags.IsComponentsV2,
+      });
+      if (fromPublicCatalog) await interaction.editReply(payload);
+      else await interaction.followUp(payload);
       return;
     }
     const product = await db.collection("products").findOne({ _id: new ObjectId(id), active: true });
     if (!product) {
-      await interaction.followUp(v2Payload({ content: "Produk tidak ditemukan atau sudah tidak aktif. Silakan pilih ulang.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
+      const payload = v2Payload({
+        content: "Produk tidak ditemukan atau sudah tidak aktif. Silakan pilih ulang.",
+        flags: EPHEMERAL | MessageFlags.IsComponentsV2,
+      });
+      if (fromPublicCatalog) await interaction.editReply(payload);
+      else await interaction.followUp(payload);
       return;
     }
     const category = safeText(product.category || "Umum", 80);
-    await panels.updateOne({ guildId: interaction.guildId, type: "catalog" }, { $set: { selectedCategory: category, selectedProductId: id, updatedAt: new Date() } });
-    await interaction.message.edit(await buildCatalogPayload(category, id));
+    await interaction.editReply(await buildCatalogPayload(category, id));
     return;
   }
+
   if (interaction.customId === "rapstore:catalog:ticket") {
+    await interaction.deferUpdate();
     const [ticketType, selectedProductId] = String(interaction.values[0] || "").split(":");
     if (!["order_now", "product_question"].includes(ticketType)) {
-      await interaction.followUp(v2Payload({ content: "Tujuan tiket tidak valid. Silakan pilih ulang.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
+      await interaction.followUp(v2Payload({
+        content: "Tujuan tiket tidak valid. Silakan pilih ulang.",
+        flags: EPHEMERAL | MessageFlags.IsComponentsV2,
+      }));
       return;
     }
-    if (!interaction.inGuild()) {
-      await interaction.followUp(v2Payload({ content: "Tiket hanya bisa dibuat di server Discord.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
-      return;
-    }
-    const { ObjectId } = await import("mongodb");
     let selectedProduct = null;
     if (selectedProductId) {
       if (!ObjectId.isValid(selectedProductId)) {
-        await interaction.followUp(v2Payload({ content: "Produk tidak valid. Pilih produk dari katalog lalu coba lagi.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
+        await interaction.followUp(v2Payload({
+          content: "Produk tidak valid. Pilih produk dari katalog lalu coba lagi.",
+          flags: EPHEMERAL | MessageFlags.IsComponentsV2,
+        }));
         return;
       }
       selectedProduct = await db.collection("products").findOne({ _id: new ObjectId(selectedProductId), active: true });
       if (!selectedProduct) {
-        await interaction.followUp(v2Payload({ content: "Produk sudah tidak tersedia. Perbarui katalog lalu coba lagi.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
+        await interaction.followUp(v2Payload({
+          content: "Produk sudah tidak tersedia. Perbarui katalog lalu coba lagi.",
+          flags: EPHEMERAL | MessageFlags.IsComponentsV2,
+        }));
         return;
       }
     }
@@ -786,7 +826,10 @@ async function handleCatalogSelection(interaction) {
       await reservations.insertOne({ guildId: interaction.guildId, buyerId: interaction.user.id, interactionId: interaction.id, createdAt: reservationTime });
     } catch (error) {
       if (error?.code === 11000) {
-        await interaction.followUp(v2Payload({ content: "Permintaan tiket lu sedang diproses. Tunggu sebentar lalu cek daftar tiket sebelum mencoba lagi.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
+        await interaction.followUp(v2Payload({
+          content: "Permintaan tiket lu sedang diproses. Tunggu sebentar lalu cek daftar tiket sebelum mencoba lagi.",
+          flags: EPHEMERAL | MessageFlags.IsComponentsV2,
+        }));
         return;
       }
       throw error;
