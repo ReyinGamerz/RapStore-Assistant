@@ -1520,10 +1520,7 @@ export async function handleOrderInteraction(interaction, client) {
           "Pembeli: <@" + currentOrder.buyerId + ">\n" +
           "Pesanan **" + clean(currentOrder.orderCode, 40) + "** sekarang berstatus **PROSES**.");
         await markProofTerminal("accepted", currentOrder.reviewedBy || interaction.user.id);
-        await db.collection("payment_proofs").updateMany(
-          { orderId: String(currentOrder._id), _id: { $ne: proof._id }, status: "pending" },
-          { $set: { status: "superseded", supersededAt: new Date(), supersededReason: "another_proof_accepted", updatedAt: new Date() } },
-        ).catch(error => console.error("[payment-proof-supersede]", error?.message || error));
+        await supersedePendingProofs(db, client, currentOrder._id, proof._id, "another_proof_accepted");
         await refreshOrderMessage(currentOrder, client).catch(error => console.error("[payment-review-order-refresh]", error?.message || error));
         await db.collection("audit_logs").insertOne({
           action: "payment.verified", actorId: interaction.user.id, guildId: interaction.guildId,
@@ -1597,10 +1594,7 @@ export async function handleOrderInteraction(interaction, client) {
       await db.collection("payment_proofs").updateOne({ _id: proof._id, status: "pending" }, {
         $set: { status: "accepted", reviewedAt: now, reviewedBy: interaction.user.id, updatedAt: now },
       }).catch(error => console.error("[payment-proof-accept]", error?.message || error));
-      await db.collection("payment_proofs").updateMany(
-        { orderId: String(order._id), _id: { $ne: proof._id }, status: "pending" },
-        { $set: { status: "superseded", supersededAt: now, supersededReason: "another_proof_accepted", updatedAt: now } },
-      ).catch(error => console.error("[payment-proof-supersede]", error?.message || error));
+      await supersedePendingProofs(db, client, order._id, proof._id, "another_proof_accepted");
       await refreshOrderMessage(order, client).catch(error => console.error("[payment-review-order-refresh]", error?.message || error));
       await db.collection("audit_logs").insertOne({
         action: "payment.verified", actorId: interaction.user.id, guildId: interaction.guildId,
@@ -1666,12 +1660,16 @@ export async function handleOrderInteraction(interaction, client) {
     }
     const result = await db.collection("orders").updateOne(
       { _id: order._id, status: "ON HOLD" },
-      { $set: { status: "CANCELLED", cancelledAt: new Date(), cancelledBy: interaction.user.id, updatedAt: new Date() } },
+      { $set: { status: "CANCELLED", paymentStatus: "cancelled", cancelledAt: new Date(), cancelledBy: interaction.user.id, updatedAt: new Date() } },
     );
     if (!result.modifiedCount) {
       await interaction.update(v2(buildPanel("PESANAN SUDAH DIPROSES", "Status pesanan sudah berubah.")));
       return;
     }
+    await db.collection("payment_proofs").updateMany(
+      { orderId: String(order._id), status: "pending" },
+      { $set: { status: "superseded", supersededAt: new Date(), supersededReason: "order_cancelled", updatedAt: new Date() }, $unset: { reviewSendingAt: "" } },
+    ).catch(error => console.error("[payment-proof-cancel]", error?.message || error));
     const updated = await db.collection("orders").findOne({ _id: order._id });
     await refreshOrderLog(updated, client).catch(error => console.error("[order-log]", error?.message || error));
     await interaction.update(v2(buildPanel("PESANAN DIBATALKAN", "Status pesanan **" + clean(order.orderCode, 40) + "** berubah menjadi **CANCELLED**. Tiket akan diarsipkan sebagai transcript.")));
