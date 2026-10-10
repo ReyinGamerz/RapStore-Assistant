@@ -1,0 +1,11 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Dependencies and runtime output
+node_modules/
+*.log
+logs/
+*.pid
+.DS_Store
