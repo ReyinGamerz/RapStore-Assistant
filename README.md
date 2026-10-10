@@ -11,17 +11,21 @@ Discord digital-store bot built with Node.js, discord.js v14, MongoDB Atlas, and
 For an existing checkout:
 ```bash
 cd ~/RapStore-Assistant
-git pull
+git pull origin main
+npm install
+npm test
 npm run check
+npm run commands:refresh
 npm start
 ```
 
-For a new install, run `npm install`, copy `.env.example` to `.env`, then set `DISCORD_TOKEN`, `DISCORD_CLIENT_ID`, and `MONGODB_URI`. Never commit or share `.env`. Global slash command changes can take time to appear in Discord.
+For a new install, run `npm install`, copy `.env.example` to `.env`, then set `DISCORD_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_GUILD_ID`, and `MONGODB_URI`. The guild ID is required for guild-scoped slash commands. Never commit or share `.env`. If the bot is managed by PM2, restart the existing process rather than starting a duplicate instance.
 
 ## Active commands
-- `/catalog` — public interactive catalog message, intended for the catalog channel.
-- `/panel` — public persistent Founder/Admin management panel; only Founder/Admin can use its controls.
-- The bot stores each server’s catalog/panel message and refreshes them on startup so existing messages use the latest code. Catalog data is also refreshed after category/product changes made through `/panel`.
+- `/catalog` — Founder/Admin-only command to create or sync the public catalog message. Members use the public catalog message itself.
+- `/panel` — Founder/Admin-only, private (ephemeral) management panel. It never posts a new public management panel.
+- Slash commands are registered for `DISCORD_GUILD_ID`; `npm run commands:refresh` also removes legacy global registrations. Runtime role checks deny members even if an old command is still cached by Discord.
+- The bot refreshes the saved public catalog on startup and removes any legacy public management-panel message recorded by older versions. Catalog data is refreshed after product/category changes made through the private `/panel`.
 - Ticket creation shows a temporary “TIKET SEDANG DIBUAT” status before reporting success or failure.
 - **Edit product:** selecting a product opens its edit form directly. Change the category by entering the exact name of an existing category; new or misspelled category names are rejected.
 - **Delete product:** available from the panel and requires confirmation.
@@ -48,6 +52,7 @@ For a new install, run `npm install`, copy `.env.example` to `.env`, then set `D
 - Ticket archival uses a MongoDB `closing` claim to avoid simultaneous archive attempts. Interrupted `closing` tickets are retried by maintenance, including after a restart. A stable archive marker is checked in recent transcript-channel history before retrying an upload, reducing duplicate transcript files if Discord accepted an upload but the database update failed.
 - Auto-close distinguishes Discord's definitive `Unknown Channel` response from temporary API/permission errors. Temporary failures are retried; if the ticket channel was actually deleted before a transcript could be made, the ticket is marked `missing_channel` and the order is flagged for manual review rather than falsely claiming a transcript was archived.
 - Order tickets create a MongoDB order record and a Components V2 panel with category, product, amount (1–25), unit price, total price, and status. Total price is recalculated when a selection changes.
+- Payment proof review cards are stored by message/channel ID and can be recovered by maintenance after a transient send/database error. When Founder/Admin approves or rejects a proof, the same review message is replaced with a final result panel; the ticket order panel and order log are refreshed independently so a refresh failure does not block the review-message update. Old or superseded proof cards have their action buttons removed when accessible.
 - Order statuses: `ON HOLD`, `PROSES`, `DONE`, and `CANCELLED`. Cancelling is available while the order is `ON HOLD` and requires confirmation. The bot archives a transcript before deleting the ticket. Once processing starts, cancellation is disabled.
 - Founder/Admin can mark an order `DONE` using the button or `!done` in the order ticket, after it reaches `PROSES`.
 - Marking an order `DONE` adds a `VOUCH` button. The buyer can submit a 1–5 rating and a message; the bot publishes one Components V2 customer-testimonial panel to `VOUCH_CHANNEL_ID`. If no vouch is submitted within one hour, a 5/5 automatic vouch with the text `vouch otomatis setelah 1 jam.` is published.
