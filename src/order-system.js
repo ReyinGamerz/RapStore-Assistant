@@ -264,9 +264,9 @@ async function refreshOrderLog(order, client) {
   if (!channel || typeof channel.send !== "function") { console.error("[order-log] ORDER_LOG_CHANNEL_ID is not a sendable channel."); return; }
   if (order.orderLogMessageId && order.orderLogChannelId === logChannelId) {
     const existing = await channel.messages.fetch(order.orderLogMessageId).catch(() => null);
-    if (existing) { await existing.edit(buildOrderLog(order)); return; }
+    if (existing) { await existing.edit({ ...buildOrderLog(order), allowedMentions: { parse: [], users: [], roles: [] } }); return; }
   }
-  const message = await channel.send(buildOrderLog(order));
+  const message = await channel.send({ ...buildOrderLog(order), allowedMentions: { parse: [], users: [], roles: [] } });
   await getDatabase().collection("orders").updateOne(
     { _id: order._id, $or: [{ orderLogMessageId: { $exists: false } }, { orderLogMessageId: null }, { orderLogChannelId: { $ne: logChannelId } }] },
     { $set: { orderLogMessageId: message.id, orderLogChannelId: logChannelId, updatedAt: new Date() } }
@@ -434,6 +434,12 @@ function transcriptMessageText(message) {
   return text;
 }
 
+function encodeInvisibleMarker(value) {
+  const bytes = Buffer.from(String(value || ""), "utf8");
+  let encoded = "\u2063";
+  for (const byte of bytes) encoded += byte.toString(2).padStart(8, "0").replace(/0/g, "\u200b").replace(/1/g, "\u200c");
+  return encoded + "\u2063";
+}
 function transcriptSuffix() {
   let value = "";
   while (value.length < 5) value += randomBytes(8).toString("base64url").replace(/[^a-zA-Z0-9]/g, "");
@@ -773,6 +779,7 @@ async function publishPendingVouches(client) {
         timeZone: "Asia/Jakarta", day: "2-digit", month: "short", year: "numeric",
       }).toUpperCase();
       const marker = "RAP-VOUCH-KEY:" + clean(vouch.orderCode || "legacy", 40);
+      const hiddenMarker = encodeInvisibleMarker(marker);
       let existingMessage = null;
       let before;
       // A Discord send can succeed while the database write fails. Search recent archive history before retrying.
@@ -781,7 +788,7 @@ async function publishPendingVouches(client) {
         if (!recent.size) break;
         existingMessage = recent.find(candidate => {
           try {
-            return JSON.stringify(candidate.components.map(component => component.toJSON?.() ?? component)).includes(marker);
+            return JSON.stringify(candidate.components.map(component => component.toJSON?.() ?? component)).includes(hiddenMarker);
           } catch {
             return false;
           }
@@ -802,7 +809,7 @@ async function publishPendingVouches(client) {
       panel.addTextDisplayComponents(new TextDisplayBuilder().setContent("> Thank you for trusting **RAP**."));
       divider(panel);
       panel.addTextDisplayComponents(new TextDisplayBuilder().setContent(
-        "-# Trusted. Fast. Secure. Professional.\n-# RAP TESTIMONI • " + date + "\n-# " + marker,
+        "-# Trusted. Fast. Secure. Professional.\n-# RAP TESTIMONI • " + date + hiddenMarker,
       ));
       const sent = existingMessage || await channel.send({
         flags: V2, components: [panel],
