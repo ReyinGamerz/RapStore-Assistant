@@ -35,14 +35,20 @@ function safeText(value, max = 500) {
   return String(value ?? "").replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, max);
 }
 async function allocateTicketCode() {
-  const tickets = getDatabase().collection("tickets");
+  const db = getDatabase();
+  const tickets = db.collection("tickets");
+  const orders = db.collection("orders");
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789&$!@%+";
   for (let attempt = 0; attempt < 30; attempt++) {
     const length = 5 + (randomBytes(1)[0] % 6);
     const bytes = randomBytes(length);
     let code = "";
     for (const byte of bytes) code += alphabet[byte % alphabet.length];
-    if (!await tickets.findOne({ ticketCode: code }, { projection: { _id: 1 } })) return code;
+    const [ticketExists, orderExists] = await Promise.all([
+      tickets.findOne({ ticketCode: code }, { projection: { _id: 1 } }),
+      orders.findOne({ $or: [{ ticketCode: code }, { orderCode: code }] }, { projection: { _id: 1 } }),
+    ]);
+    if (!ticketExists && !orderExists) return code;
   }
   throw new Error("Gagal membuat ID tiket unik setelah beberapa percobaan.");
 }
