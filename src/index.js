@@ -35,7 +35,7 @@ async function showFounderPanel(interaction) {
     await interaction.reply(v2Payload({ content: "Panel hanya untuk Founder/Admin.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
     return;
   }
-  const panel = buildPanel("🛠️ RAPSTORE — PANEL STAFF", "Pilih tindakan. Semua perubahan hanya bisa dilakukan Founder/Admin.", ["Tambah/edit produk mengatur nama, kategori, deskripsi, harga retail, dan harga reseller.", "Tambah stok membuka input item digital satu per baris.", "Gunakan /catalog untuk melihat katalog pembeli."]);
+  const panel = buildPanel("RAPSTORE — PANEL KATALOG", "Kelola nama, kategori, deskripsi, dan harga produk. Panel ini hanya untuk Founder/Admin.", ["Gunakan /catalog untuk melihat tampilan katalog pembeli."]);
   panel.addActionRowComponents(new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId("rapstore:panel:add").setLabel("Tambah Produk").setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId("rapstore:panel:edit").setLabel("Edit Produk").setStyle(ButtonStyle.Secondary),
@@ -48,21 +48,21 @@ async function handleFounderPanelButton(interaction) {
   const action = interaction.customId.split(":").pop();
   if (action === "add") {
     const modal = new ModalBuilder().setCustomId("rapstore:panelmodal:add").setTitle("Tambah Produk");
-    const specs = [["nama","Nama produk",TextInputStyle.Short,true,100],["harga","Harga retail (Rupiah)",TextInputStyle.Short,true,12],["harga_reseller","Harga reseller (Rupiah)",TextInputStyle.Short,true,12],["kategori","Kategori",TextInputStyle.Short,true,80],["deskripsi","Deskripsi",TextInputStyle.Paragraph,false,500]];
+    const specs = [["nama","Nama produk",TextInputStyle.Short,true,100],["harga","Harga (Rupiah)",TextInputStyle.Short,true,12],["kategori","Kategori",TextInputStyle.Short,true,80],["deskripsi","Deskripsi",TextInputStyle.Paragraph,false,500]];
     for (const [id,label,style,required,max] of specs) modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId(id).setLabel(label).setStyle(style).setRequired(required).setMaxLength(max)));
     await interaction.showModal(modal); return;
   }
   const db = getDatabase();
   if (action === "list") {
     const list = await db.collection("products").find({}).sort({ name: 1 }).limit(15).toArray();
-    const lines = await Promise.all(list.map(async p => { const stock = await db.collection("stock_items").countDocuments({ productId: String(p._id), status: "available" }); return "• " + safeText(p.name, 80) + " [" + (p.active ? "aktif" : "nonaktif") + "]\nID: " + p._id + "\nKategori: " + safeText(p.category || "Umum",80) + " • Retail " + formatPrice(p.price) + " • Reseller " + formatPrice(p.resellerPrice || p.price) + " • Stok " + stock; }));
+    const lines = await Promise.all(list.map(async p => { const stock = await db.collection("stock_items").countDocuments({ productId: String(p._id), status: "available" }); return "• " + safeText(p.name, 80) + " [" + (p.active ? "aktif" : "nonaktif") + "]\nID: " + p._id + "\nKategori: " + safeText(p.category || "Umum",80) + " • Harga " + formatPrice(p.price); }));
     await interaction.reply(v2Payload({ content: lines.join("\n\n").slice(0,3800) || "Belum ada produk.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 })); return;
   }
-  if (action === "edit" || action === "stock") {
-    const products = await db.collection("products").find(action === "stock" ? {active:true} : {}).sort({name:1}).limit(25).toArray();
+  if (action === "edit") {
+    const products = await db.collection("products").find({}).sort({name:1}).limit(25).toArray();
     if (!products.length) { await interaction.reply(v2Payload({content:"Belum ada produk yang tersedia.",flags:EPHEMERAL|MessageFlags.IsComponentsV2})); return; }
-    const menu = new StringSelectMenuBuilder().setCustomId("rapstore:panelchoose:" + action).setPlaceholder("Pilih produk").setMinValues(1).setMaxValues(1).addOptions(products.map(p => ({label:safeText(p.name,100),value:String(p._id),description:(formatPrice(p.price) + " • " + (p.active?"aktif":"nonaktif")).slice(0,100)})));
-    const panel = buildPanel(action === "edit" ? "EDIT PRODUK" : "TAMBAH STOK", "Pilih produk dari daftar."); panel.addActionRowComponents(new ActionRowBuilder().addComponents(menu));
+    const menu = new StringSelectMenuBuilder().setCustomId("rapstore:panelchoose:edit").setPlaceholder("Pilih produk").setMinValues(1).setMaxValues(1).addOptions(products.map(p => ({label:safeText(p.name,100),value:String(p._id),description:(formatPrice(p.price) + " • " + (p.active?"aktif":"nonaktif")).slice(0,100)})));
+    const panel = buildPanel("EDIT PRODUK", "Pilih produk dari daftar."); panel.addActionRowComponents(new ActionRowBuilder().addComponents(menu));
     await interaction.reply({flags:MessageFlags.IsComponentsV2|MessageFlags.Ephemeral,components:[panel]});
   }
 }
@@ -73,7 +73,7 @@ async function handleFounderPanelSelect(interaction) {
   const action=interaction.customId.split(":").pop();
   if(action==="edit"){
     const modal=new ModalBuilder().setCustomId("rapstore:panelmodal:edit:"+id).setTitle("Edit Produk");
-    const specs=[["nama","Nama produk",TextInputStyle.Short,true,100,product.name],["harga","Harga retail",TextInputStyle.Short,true,12,String(product.price)],["harga_reseller","Harga reseller",TextInputStyle.Short,true,12,String(product.resellerPrice||product.price)],["kategori","Kategori",TextInputStyle.Short,true,80,product.category||"Umum"],["deskripsi","Deskripsi",TextInputStyle.Paragraph,false,500,product.description||""]];
+    const specs=[["nama","Nama produk",TextInputStyle.Short,true,100,product.name],["harga","Harga",TextInputStyle.Short,true,12,String(product.price)],["kategori","Kategori",TextInputStyle.Short,true,80,product.category||"Umum"],["deskripsi","Deskripsi",TextInputStyle.Paragraph,false,500,product.description||""]];
     for(const [cid,label,style,required,max,value] of specs) modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId(cid).setLabel(label).setStyle(style).setRequired(required).setMaxLength(max).setValue(String(value).slice(0,max))));
     await interaction.showModal(modal); return;
   }
@@ -83,12 +83,11 @@ async function handleFounderPanelModal(interaction) {
   if (!interaction.inGuild() || !hasStaffRole(interaction.member)) { await interaction.reply(v2Payload({content:"Akses ditolak.",flags:EPHEMERAL|MessageFlags.IsComponentsV2})); return; }
   const db=getDatabase(); const parts=interaction.customId.split(":");
   if(parts[2]==="add"||parts[2]==="edit"){
-    const name=safeText(interaction.fields.getTextInputValue("nama"),100); const price=Number(interaction.fields.getTextInputValue("harga")); const resellerPrice=Number(interaction.fields.getTextInputValue("harga_reseller")); const category=safeText(interaction.fields.getTextInputValue("kategori")||"Umum",80)||"Umum"; const description=safeText(interaction.fields.getTextInputValue("deskripsi")||"",500);
-    if(!name||!Number.isSafeInteger(price)||price<1||!Number.isSafeInteger(resellerPrice)||resellerPrice<1||resellerPrice>price){await interaction.reply(v2Payload({content:"Input tidak valid. Harga harus positif dan harga reseller tidak boleh lebih tinggi dari retail.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;}
-    if(parts[2]==="add"){const now=new Date();const result=await db.collection("products").insertOne({name,price,resellerPrice,category,description,active:true,currency:"IDR",createdAt:now,updatedAt:now,createdBy:interaction.user.id});await audit("product.created",interaction,{productId:String(result.insertedId),source:"panel"});await interaction.reply(v2Payload({content:"Produk berhasil dibuat. ID: "+result.insertedId,flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;}
-    const {ObjectId}=await import("mongodb");const id=parts[3];if(!ObjectId.isValid(id)){await interaction.reply(v2Payload({content:"ID produk tidak valid.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;}const result=await db.collection("products").updateOne({_id:new ObjectId(id)},{$set:{name,price,resellerPrice,category,description,updatedAt:new Date(),updatedBy:interaction.user.id}});if(!result.matchedCount){await interaction.reply(v2Payload({content:"Produk tidak ditemukan.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;}await audit("product.updated",interaction,{productId:id,source:"panel"});await interaction.reply(v2Payload({content:"Produk berhasil diperbarui.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;
+    const name=safeText(interaction.fields.getTextInputValue("nama"),100); const price=Number(interaction.fields.getTextInputValue("harga")); const category=safeText(interaction.fields.getTextInputValue("kategori")||"Umum",80)||"Umum"; const description=safeText(interaction.fields.getTextInputValue("deskripsi")||"",500);
+    if(!name||!Number.isSafeInteger(price)||price<1){await interaction.reply(v2Payload({content:"Nama produk dan harga wajib valid. Harga harus berupa angka positif.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;}
+    if(parts[2]==="add"){const now=new Date();const result=await db.collection("products").insertOne({name,price,category,description,active:true,currency:"IDR",createdAt:now,updatedAt:now,createdBy:interaction.user.id});await audit("product.created",interaction,{productId:String(result.insertedId),source:"panel"});await interaction.reply(v2Payload({content:"Produk berhasil dibuat. ID: "+result.insertedId,flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;}
+    const {ObjectId}=await import("mongodb");const id=parts[3];if(!ObjectId.isValid(id)){await interaction.reply(v2Payload({content:"ID produk tidak valid.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;}const result=await db.collection("products").updateOne({_id:new ObjectId(id)},{$set:{name,price,category,description,updatedAt:new Date(),updatedBy:interaction.user.id}});if(!result.matchedCount){await interaction.reply(v2Payload({content:"Produk tidak ditemukan.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;}await audit("product.updated",interaction,{productId:id,source:"panel"});await interaction.reply(v2Payload({content:"Produk berhasil diperbarui.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;
   }
-  if(parts[2]==="stock"){const {ObjectId}=await import("mongodb");const id=parts[3];const product=ObjectId.isValid(id)?await db.collection("products").findOne({_id:new ObjectId(id),active:true}):null;if(!product){await interaction.reply(v2Payload({content:"Produk aktif tidak ditemukan.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;}const items=[...new Set(interaction.fields.getTextInputValue("items").split(/\r?\n/).map(x=>x.trim()).filter(Boolean))];if(!items.length||items.length>100||items.some(x=>x.length>1000)){await interaction.reply(v2Payload({content:"Masukkan 1–100 item unik, maksimal 1000 karakter per item.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;}try{await db.collection("stock_items").insertMany(items.map(code=>({productId:String(product._id),code,status:"available",createdAt:new Date(),createdBy:interaction.user.id})),{ordered:true});}catch(error){if(error?.code===11000){await interaction.reply(v2Payload({content:"Item duplikat terdeteksi; sebagian item mungkin sudah masuk. Periksa stok sebelum mencoba ulang.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));return;}throw error;}await audit("stock.added",interaction,{productId:id,count:items.length,source:"panel"});await interaction.reply(v2Payload({content:"Berhasil menambahkan "+items.length+" item stok.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));}
 }
 async function catalogData(db) {
   const products = db.collection("products");
@@ -130,7 +129,8 @@ async function renderCatalogPanel(interaction, selectedCategory = "", selectedPr
     }
   }
 
-  const panel = buildPanel("### 🛍️ RAPSTORE — CATALOG");
+  const panel = buildPanel("");
+  panel.addTextDisplayComponents(new TextDisplayBuilder().setContent("### 🛍️ RAPSTORE — CATALOG"));
   panel.addSeparatorComponents(new SeparatorBuilder());
   panel.addTextDisplayComponents(new TextDisplayBuilder().setContent(lines.join("\n").slice(0, 3900)));
   panel.addSeparatorComponents(new SeparatorBuilder());
