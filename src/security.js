@@ -20,6 +20,14 @@ export function canAccessTicket(ticket, userId, isStaff = false) {
   return String(ticket.buyerId || "") === String(userId) || Boolean(isStaff);
 }
 
+/**
+ * An order ticket may be manually archived only after its order is cancelled.
+ * Active and completed orders must use their payment/vouch lifecycle instead.
+ */
+export function canManuallyCloseTicket(order) {
+  return !order || order.status === "CANCELLED";
+}
+
 export function escapeDiscordMarkdown(value) {
   return String(value ?? "").replace(/([\\`*_{}\[\]()<>#+\-.!|~])/g, "\\$1");
 }
