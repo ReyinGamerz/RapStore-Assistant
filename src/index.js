@@ -505,7 +505,8 @@ async function renderCatalogPanel(interaction, selectedCategory = "", selectedPr
   } else {
     const categoryRecord = await db.collection("categories").findOne({ name: category });
     const categoryInfo = categoryDisplay({ name: category, emoji: categoryRecord?.emoji || list.find(p => p.categoryEmoji)?.categoryEmoji || "" });
-    const emojiText = categoryInfo.emoji ? "<" + (categoryInfo.emoji.animated ? "a" : "") + ":" + categoryInfo.emoji.name + ":" + categoryInfo.emoji.id + "> " : "";
+    const renderedCategoryEmoji = renderEmoji(categoryInfo.emoji);
+    const emojiText = renderedCategoryEmoji ? renderedCategoryEmoji + " " : "";
     lines.push("**Category:** " + emojiText + categoryInfo.name, "");
     if (!list.length) {
       lines.push("Belum ada produk aktif di kategori ini.");
