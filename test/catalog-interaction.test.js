@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 const source = readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
+const orderSource = readFileSync(new URL("../src/order-system.js", import.meta.url), "utf8");
 const catalogStart = source.indexOf("async function handleCatalogSelection(interaction)");
 const catalogEnd = source.indexOf("\nfunction formatPrice(", catalogStart);
 assert.notEqual(catalogStart, -1, "catalog selection handler should exist");
@@ -61,6 +62,17 @@ test("confirming an order revalidates the product and uses the guarded order-tic
   assert.match(source, /async function handleCatalogOrderButton\(interaction\)[\s\S]*?action === "cancel"[\s\S]*?await interaction\.deleteReply\(\)/);
   assert.match(source, /action !== "confirm" \|\| !productId/);
   assert.match(source, /await createCatalogOrderTicket\(interaction, productId\)/);
+});
+
+test("order and support ticket counters use independent names", () => {
+  const allocatorStart = orderSource.indexOf("async function allocateTicketNumber(kind)");
+  const allocatorEnd = orderSource.indexOf("\nasync function orderCategories()", allocatorStart);
+  assert.notEqual(allocatorStart, -1);
+  assert.notEqual(allocatorEnd, -1);
+  const allocator = orderSource.slice(allocatorStart, allocatorEnd);
+  assert.match(allocator, /kind === "order" \? "ticket:order" : "ticket:support"/);
+  assert.match(allocator, /kind === "order" \? "rap-" : "support-"/);
+  assert.match(allocator, /const initial = kind === "order" \? 0 : -1/);
 });
 
 test("catalog is staff-published and the founder panel remains ephemeral", () => {
