@@ -120,26 +120,17 @@ async function renderCatalogPanel(interaction, selectedCategory = "", selectedPr
       for (const product of list) {
         const retail = Number(product.price || 0);
         const name = safeText(product.name, 100);
-        const description = String(product.description || "")
-          .replace(/\r\n/g, "\n")
-          .replace(/\\n/g, "\n")
-          .replace(/\r/g, "\n")
-          .trim();
         const isServerBoost = /server\s*boost/i.test(name);
         const displayName = isServerBoost
           ? name.replace(/\b(\d+x)\b/g, "`$1`").replace(/\b(\d+)\s+Month\b/gi, "`$1` Month")
           : name;
-        lines.push("### " + displayName);
-        if (description && !isServerBoost) {
-          lines.push(description.slice(0, 900));
-          lines.push("");
-        }
-        lines.push("**Harga:** `" + formatPrice(retail) + "`", "");
+        lines.push("**" + displayName + "**");
+        lines.push("**Harga:** `" + formatPrice(retail).replace(/^Rp\s*/, "Rp") + "`", "");
       }
     }
   }
 
-  const panel = buildPanel("🛍️ RAPSTORE — CATALOG");
+  const panel = buildPanel("### 🛍️ RAPSTORE — CATALOG");
   panel.addSeparatorComponents(new SeparatorBuilder());
   panel.addTextDisplayComponents(new TextDisplayBuilder().setContent(lines.join("\n").slice(0, 3900)));
   panel.addSeparatorComponents(new SeparatorBuilder());
