@@ -408,18 +408,14 @@ async function archiveTicketImages(archiveChannel, messages, ticket, archiveKey,
       if (!attachment?.url || !isImageAttachment(attachment) || seenUrls.has(attachment.url)) continue;
       seenUrls.add(attachment.url);
       const token = String(attachment.id || message.id + "-" + photos.length).replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 100);
-      photos.push({
-        messageId: message.id,
-        attachment,
-        marker: archiveKey + "-photo-" + token,
-      });
+      photos.push({ messageId: message.id, attachment, token, marker: archiveKey + "-photo-" + token });
     }
   }
 
   const urls = new Map();
   if (!photos.length) return urls;
 
-  // Reuse photos already copied during an interrupted archive attempt.
+  // Reuse all images already copied during an interrupted archive attempt.
   const markerLookup = new Map(photos.map(photo => ["[archive-photo-key:" + photo.marker + "]", photo]));
   let before;
   for (let page = 0; page < 10; page++) {
@@ -428,35 +424,52 @@ async function archiveTicketImages(archiveChannel, messages, ticket, archiveKey,
     for (const message of batch.values()) {
       const content = String(message.content || "");
       for (const [marker, photo] of markerLookup) {
-        if (!content.includes(marker)) continue;
-        const archived = message.attachments?.first();
-        if (!archived?.url) {
-          throw new Error("Foto arsip ditemukan dengan penanda yang benar, tetapi lampirannya tidak terbaca. Tiket dipertahankan.");
+        if (urls.has(photo.attachment.url) || !content.includes(marker)) continue;
+        const prefix = "rap-" + photo.token + "-";
+        const archived = message.attachments?.find(item => String(item.name || "").startsWith(prefix));
+        if (archived?.url) urls.set(photo.attachment.url, archived.url);
+      }
+      // Compatibility with old archive messages that contain exactly one photo.
+      if (message.attachments?.size === 1) {
+        const archived = message.attachments.first();
+        for (const [marker, photo] of markerLookup) {
+          if (!urls.has(photo.attachment.url) && content.includes(marker) && archived?.url) {
+            urls.set(photo.attachment.url, archived.url);
+          }
         }
-        urls.set(photo.attachment.url, archived.url);
       }
     }
     before = batch.last().id;
     if (batch.size < 100 || photos.every(photo => urls.has(photo.attachment.url))) break;
   }
 
-  for (const photo of photos) {
-    if (urls.has(photo.attachment.url)) continue;
-    const name = clean(photo.attachment.name || "foto-tiket.png", 180).replace(/[\\/]/g, "_");
+  const pending = photos.filter(photo => !urls.has(photo.attachment.url));
+  const maxFilesPerMessage = 10;
+  for (let offset = 0; offset < pending.length; offset += maxFilesPerMessage) {
+    const group = pending.slice(offset, offset + maxFilesPerMessage);
+    const files = group.map(photo => {
+      const name = clean(photo.attachment.name || "foto-tiket.png", 150).replace(/[\\/]/g, "_");
+      return { attachment: photo.attachment.url, name: "rap-" + photo.token + "-" + name };
+    });
+    const markers = group.map(photo => "[archive-photo-key:" + photo.marker + "]").join("\n");
     const archivedMessage = await archiveChannel.send({
-      content: "Foto tiket #" + baseName + " [archive-photo-key:" + photo.marker + "]",
-      files: [{ attachment: photo.attachment.url, name }],
+      content: "Foto tiket #" + baseName + " • batch " + (Math.floor(offset / maxFilesPerMessage) + 1) +
+        " [" + group.length + " foto]\n" + markers,
+      files,
       allowedMentions: { parse: [], users: [], roles: [] },
     });
-    const archived = archivedMessage.attachments?.first();
-    if (!archived?.url) {
-      throw new Error("Discord tidak mengembalikan URL setelah mengarsipkan foto '" + name + "'. Tiket dipertahankan.");
+    for (const photo of group) {
+      const prefix = "rap-" + photo.token + "-";
+      const archived = archivedMessage.attachments?.find(item => String(item.name || "").startsWith(prefix));
+      if (!archived?.url) {
+        throw new Error("Discord tidak mengembalikan URL setelah mengarsipkan foto '" +
+          clean(photo.attachment.name || "foto", 150) + "'. Tiket dipertahankan.");
+      }
+      urls.set(photo.attachment.url, archived.url);
     }
-    urls.set(photo.attachment.url, archived.url);
   }
   return urls;
 }
-
 export async function archiveAndDeleteTicket({ channel, ticket, client, closedBy = null, reason = "ticket_closed" }) {
   if (!channel || !ticket) throw new Error("Ticket channel and database record are required to archive.");
   const tickets = getDatabase().collection("tickets");
@@ -522,7 +535,7 @@ export async function archiveAndDeleteTicket({ channel, ticket, client, closedBy
     messages.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
     const baseName = clean(ticket.ticketPrefix && Number.isInteger(ticket.ticketNumber)
       ? ticket.ticketPrefix + "-" + ticket.ticketNumber : channel.name.replace(/^closed-/, ""), 80).replace(/[^a-zA-Z0-9_-]/g, "-");
-    const ticketCode = clean(ticket.ticketCode || "", 20).replace(/[^a-zA-Z0-9&$!@%+_-]/g, "");
+    const ticketCode = clean(ticket.ticketCode || "", 20).replace(/[^a-zA-Z0-9#$&!@%+_-]/g, "");
     // Copy image attachments into the transcript channel first, then use those new Discord CDN URLs in the HTML.
     // If any image cannot be archived, keep the original ticket so no proof/photo is lost.
     const archivedImageUrls = await archiveTicketImages(archiveChannel, messages, ticket, archiveKey, baseName);

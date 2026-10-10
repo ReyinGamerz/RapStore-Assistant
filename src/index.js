@@ -38,12 +38,18 @@ async function allocateTicketCode() {
   const db = getDatabase();
   const tickets = db.collection("tickets");
   const orders = db.collection("orders");
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789&$!@%+";
+  const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+  const digits = "0123456789";
+  const symbols = "#$&";
   for (let attempt = 0; attempt < 30; attempt++) {
     const length = 5 + (randomBytes(1)[0] % 6);
     const bytes = randomBytes(length);
     let code = "";
-    for (const byte of bytes) code += alphabet[byte % alphabet.length];
+    for (const byte of bytes) {
+      const kind = byte % 10;
+      const pool = kind < 8 ? letters : kind === 8 ? digits : symbols;
+      code += pool[randomBytes(1)[0] % pool.length];
+    }
     const [ticketExists, orderExists] = await Promise.all([
       tickets.findOne({ ticketCode: code }, { projection: { _id: 1 } }),
       orders.findOne({ $or: [{ ticketCode: code }, { orderCode: code }] }, { projection: { _id: 1 } }),
