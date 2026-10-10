@@ -638,7 +638,7 @@ async function catalogData(db) {
 async function buildCatalogPayload(selectedCategory = "", selectedProductId = "") {
   const db = getDatabase();
   const { categories, products } = await catalogData(db);
-  const category = categories.includes(selectedCategory) ? selectedCategory : "";
+  const category = categories.includes(selectedCategory) ? selectedCategory : (categories[0] || "");
   const list = category
     ? await products.find(category === "Umum"
       ? { active: true, $or: [{ category: "Umum" }, { category: { $exists: false } }, { category: null }, { category: "" }] }
@@ -717,6 +717,25 @@ async function buildCatalogPayload(selectedCategory = "", selectedProductId = ""
 
   panel.addActionRowComponents(new ActionRowBuilder().addComponents(categoryMenu));
   panel.addActionRowComponents(new ActionRowBuilder().addComponents(productMenu));
+  const categoryIndex = category ? categories.indexOf(category) : -1;
+  const pageLabel = categories.length ? (Math.max(0, categoryIndex) + 1) + "/" + categories.length : "0/0";
+  panel.addActionRowComponents(new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId("rapstore:catalog:category-page:prev:" + Math.max(0, categoryIndex))
+      .setLabel("PREV")
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(categories.length <= 1),
+    new ButtonBuilder()
+      .setCustomId("rapstore:catalog:category-page:counter:" + Math.max(0, categoryIndex))
+      .setLabel(pageLabel)
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(true),
+    new ButtonBuilder()
+      .setCustomId("rapstore:catalog:category-page:next:" + Math.max(0, categoryIndex))
+      .setLabel("NEXT")
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(categories.length <= 1),
+  ));
   return {
     flags: MessageFlags.IsComponentsV2,
     components: [panel],
@@ -802,6 +821,38 @@ async function handleCatalogSelection(interaction) {
     return;
   }
 
+}
+
+async function handleCatalogPageButton(interaction) {
+  if (!interaction.inGuild()) {
+    await interaction.reply(v2Payload({
+      content: "Navigasi katalog hanya bisa digunakan di server Discord.",
+      flags: EPHEMERAL | MessageFlags.IsComponentsV2,
+    }));
+    return;
+  }
+  const parts = String(interaction.customId || "").split(":");
+  const action = parts[3] || "";
+  const requestedIndex = Number(parts[4]);
+  if (!["prev", "next"].includes(action)) {
+    await interaction.reply(v2Payload({
+      content: "Navigasi kategori tidak valid. Buka ulang katalog lalu coba lagi.",
+      flags: EPHEMERAL | MessageFlags.IsComponentsV2,
+    }));
+    return;
+  }
+  const { categories } = await catalogData(getDatabase());
+  await interaction.deferUpdate();
+  if (!categories.length) {
+    await interaction.editReply(await buildCatalogPayload());
+    return;
+  }
+  const currentIndex = Number.isInteger(requestedIndex) && requestedIndex >= 0 && requestedIndex < categories.length
+    ? requestedIndex
+    : 0;
+  const delta = action === "prev" ? -1 : 1;
+  const nextIndex = (currentIndex + delta + categories.length) % categories.length;
+  await interaction.editReply(await buildCatalogPayload(categories[nextIndex], ""));
 }
 
 async function createCatalogOrderTicket(interaction, selectedProductId) {
@@ -1015,6 +1066,9 @@ async function handleInteraction(interaction) {
   if ((interaction.isButton() || interaction.isStringSelectMenu() || interaction.isModalSubmit()) &&
       (interaction.customId.startsWith("rapstore:order:") || interaction.customId.startsWith("rapstore:payment:") || interaction.customId.startsWith("rapstore:vouch:"))) {
     await handleOrderInteraction(interaction, client); return;
+  }
+  if (interaction.isButton() && interaction.customId.startsWith("rapstore:catalog:category-page:")) {
+    await handleCatalogPageButton(interaction); return;
   }
   if (interaction.isButton() && interaction.customId.startsWith("rapstore:catalog:order:")) {
     await handleCatalogOrderButton(interaction); return;
