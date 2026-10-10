@@ -1,0 +1,21 @@
+{
+  "name": "rapstore-assistant",
+  "version": "1.0.0",
+  "private": true,
+  "description": "RapStore Assistant Discord digital-store bot with manual GoPay QR payments and MongoDB Atlas.",
+  "type": "module",
+  "engines": {
+    "node": ">=20.18.0"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "commands:deploy": "node src/deploy-commands.js",
+    "commands:refresh": "node src/deploy-commands.js",
+    "check": "node --check src/index.js && node --check src/database.js && node --check src/deploy-commands.js && node --check src/global-commands.js && node --check src/commands.js && node --check src/ui.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.27.0",
+    "dotenv": "^18.0.0",
+    "mongodb": "^7.7.0"
+  }
+}
