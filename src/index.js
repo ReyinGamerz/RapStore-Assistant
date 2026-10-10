@@ -256,7 +256,11 @@ async function showFounderPanel(interaction) {
     await interaction.reply(v2Payload({ content: "Panel hanya untuk Founder/Admin.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
     return;
   }
-  await upsertPersistentPanel(interaction, "panel", buildFounderPanelPayload());
+  // The management panel must never be posted publicly. Keep it ephemeral to the staff member.
+  await interaction.reply({
+    ...buildFounderPanelPayload(),
+    flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral,
+  });
 }
 
 async function refreshPersistentPanels(readyClient, onlyType = null) {
@@ -265,9 +269,30 @@ async function refreshPersistentPanels(readyClient, onlyType = null) {
   const records = await db.collection("persistent_panels").find(filter).toArray();
   for (const record of records) {
     try {
+      // Remove any legacy public management panel created by older bot versions.
+      if (record.type === "panel") {
+        const oldChannel = await readyClient.channels.fetch(record.channelId).catch(() => null);
+        if (!oldChannel?.messages) {
+          console.error("[persistent-panel] Cannot access legacy public panel channel; keeping cleanup record to retry.");
+          continue;
+        }
+        const oldMessage = await oldChannel.messages.fetch(record.messageId).catch(() => null);
+        if (oldMessage) {
+          try {
+            await oldMessage.delete();
+          } catch (error) {
+            logError("legacy-public-panel-delete", error);
+            console.error("[persistent-panel] Could not delete legacy public panel; keeping cleanup record to retry.");
+            continue;
+          }
+        }
+        await db.collection("persistent_panels").deleteOne({ _id: record._id });
+        console.log("[persistent-panel] Removed legacy public management panel; /panel is now ephemeral.");
+        continue;
+      }
       const payload = record.type === "catalog"
         ? await buildCatalogPayload(record.selectedCategory || "", record.selectedProductId || "")
-        : record.type === "panel" ? buildFounderPanelPayload() : null;
+        : null;
       if (!payload) continue;
       const channel = await readyClient.channels.fetch(record.channelId).catch(() => null);
       if (!channel || typeof channel.send !== "function") { console.error("[persistent-panel] Saved channel unavailable for " + record.type); continue; }
@@ -909,6 +934,7 @@ async function handleInteraction(interaction) {
   if (interaction.commandName === "panel") { await showFounderPanel(interaction); return; }
   if (interaction.commandName === "catalog") {
     if (!interaction.inGuild()) { await interaction.reply(v2Payload({ content: "Katalog publik hanya bisa dibuat di channel server.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 })); return; }
+    if (!hasStaffRole(interaction.member)) { await interaction.reply(v2Payload({ content: "Command /catalog hanya untuk Founder/Admin. Member cukup menggunakan pesan katalog publik yang sudah tersedia.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 })); return; }
     await upsertPersistentPanel(interaction, "catalog", await buildCatalogPayload());
   }
 }
