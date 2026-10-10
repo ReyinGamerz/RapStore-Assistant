@@ -36,10 +36,10 @@ For a new install, run `npm install`, copy `.env.example` to `.env`, then set `D
 - Product names and prices are rendered in bold; Server Boost multipliers and month count are formatted with separate backticks. The custom `alur` emoji (`<:alur:1558458209977499740>`) appears with one space before **Harga:**. The catalog heading uses `<:Catalog:1558470276981850132>`. 
 - Descriptions and reseller pricing are not shown.
 - Products come from the MongoDB `products` collection and only active products are displayed. Add or edit intended products in `/panel` with their correct category and price.
-- The category, product, and ticket-purpose menus remain below the list. `ORDER SEKARANG` creates an order ticket; `TANYA-TANYA DULU` creates a consultation ticket.
+- The category and product menus remain below the list; the ticket-destination menu is removed. Selecting an active product updates the public catalog and opens a separate ephemeral order confirmation with `Ya, Lanjutkan` and `Batalkan`. Only `Ya, Lanjutkan` creates an order ticket; `Batalkan` deletes the private confirmation without creating a ticket. The support-ticket opening flow is intentionally not exposed in the catalog yet.
 
 ## Tickets
-- Order channels use persistent sequential names such as `rap-1`, `rap-2`; consultation channels use a separate counter such as `tanya-0`, `tanya-1`.
+- Order channels use persistent sequential names such as `rap-1`, `rap-2`; support tickets have a separate reserved counter and naming scheme such as `support-0`, `support-1`. The support-ticket opening flow will be added separately and is not available from the catalog yet.
 - Every ticket receives one random public `ticketCode` (5–10 characters, e.g. `&JI$U`). The same code is stored on the ticket and order, displayed below the order status, included in the ticket channel topic, and used in the transcript HTML filename. The MongoDB `_id` remains an internal database key. This shared code is intended to support future lookups such as `/cektranscript ID`.
 - Counters are stored in MongoDB's `counters` collection and are not reused when a ticket closes or the bot restarts. If channel creation fails after a number is allocated, that number can be skipped rather than reused.
 - Each user can have only one open ticket per server, regardless of ticket type.
