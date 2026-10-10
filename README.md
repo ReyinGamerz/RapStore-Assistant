@@ -38,11 +38,13 @@ For a new install, run `npm install`, copy `.env.example` to `.env`, then set `D
 - Order channels use persistent sequential names such as `rap-1`, `rap-2`; consultation channels use a separate counter such as `tanya-0`, `tanya-1`.
 - Counters are stored in MongoDB's `counters` collection and are not reused when a ticket closes or the bot restarts. If channel creation fails after a number is allocated, that number can be skipped rather than reused.
 - Each user can have only one open ticket per server, regardless of ticket type.
-- Tickets are created under `SUPPORT_CATEGORY_ID`.
-- Consultation tickets are for discussion and keep the existing confirmed-close flow.
+- Tickets are created under `SUPPORT_CATEGORY_ID`. Category and product dropdowns in order tickets reuse their saved custom/unicode emojis from the catalog.
+- Consultation tickets are for discussion and keep the confirmed-close flow. Closing a ticket uploads a readable HTML transcript with a random five-character suffix (for example `rap-1-#8buH7.html`) to `TRANSCRIPT_CHANNEL_ID`, then deletes the Discord ticket channel.
 - Order tickets create a MongoDB order record and a Components V2 panel with category, product, amount (1–25), unit price, total price, and status. Total price is recalculated when a selection changes.
-- Order statuses: `ON HOLD`, `PROSES`, `DONE`, and `CANCELLED`. Cancelling is available while the order is `ON HOLD` and requires confirmation. It updates the order and ticket records, locks the buyer out of the channel, and renames the channel with a `closed-` prefix. Once processing starts, cancellation is disabled.
-- Founder/Admin can mark an order `DONE` after it reaches `PROSES`.
+- Order statuses: `ON HOLD`, `PROSES`, `DONE`, and `CANCELLED`. Cancelling is available while the order is `ON HOLD` and requires confirmation. The bot archives a transcript before deleting the ticket. Once processing starts, cancellation is disabled.
+- Founder/Admin can mark an order `DONE` using the button or `!done` in the order ticket, after it reaches `PROSES`.
+- Marking an order `DONE` adds a `VOUCH` button. The buyer can submit a 1–5 rating and a message; the bot publishes one Components V2 customer-testimonial panel to `VOUCH_CHANNEL_ID`. If no vouch is submitted within one hour, a 5/5 automatic vouch is published.
+- One hour after `DONE`, the bot publishes/ensures the vouch exists, uploads the ticket transcript, then deletes the order ticket channel. The scheduled job retries after restarts and temporary configuration/permission failures; a ticket is not deleted if the transcript cannot be uploaded.
 
 ## Manual payment configuration
 Set these values in the local `.env` file after confirming the store's actual payment details:
@@ -50,6 +52,8 @@ Set these values in the local `.env` file after confirming the store's actual pa
 - `PAYMENT_BANK_NAME` — bank name.
 - `PAYMENT_BANK_ACCOUNT_NAME` — recipient/account holder name.
 - `PAYMENT_BANK_ACCOUNT_NUMBER` — account number.
+- `VOUCH_CHANNEL_ID` — Discord text channel where customer testimonials are published.
+- `TRANSCRIPT_CHANNEL_ID` — Discord text channel where HTML ticket transcripts are archived before the original ticket channel is deleted.
 
 QRIS and bank details are not bundled in the repository. If the corresponding configuration is empty, the bot refuses to display payment instructions rather than inventing payment details. After transfer, the buyer can attach a proof file in the order ticket. Founder/Admin receives a Components V2 verification panel with `PROSES` and `TIDAK VALID` actions. Accepting a proof marks payment verified and moves the order to `PROSES`; rejecting it asks the buyer to resend proof. Manual proof review does not automatically verify funds with a bank or payment provider.
 

@@ -28,4 +28,6 @@ export const config = {
     bankAccountName: optionalId("PAYMENT_BANK_ACCOUNT_NAME"),
     bankAccountNumber: optionalId("PAYMENT_BANK_ACCOUNT_NUMBER"),
   },
+  vouchChannelId: optionalId("VOUCH_CHANNEL_ID"),
+  transcriptChannelId: optionalId("TRANSCRIPT_CHANNEL_ID"),
 };

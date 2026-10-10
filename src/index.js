@@ -8,7 +8,7 @@ import { config } from "./config.js";
 import { connectDatabase, closeDatabase, getDatabase } from "./database.js";
 import { refreshGlobalCommands } from "./global-commands.js";
 import { buildMessage, buildComponentsOnly, buildPanel } from "./ui.js";
-import { allocateTicketNumber, initializeOrderTicket, handleOrderInteraction, handleOrderMessage } from "./order-system.js";
+import { allocateTicketNumber, initializeOrderTicket, handleOrderInteraction, handleOrderMessage, archiveAndDeleteTicket, startOrderMaintenance } from "./order-system.js";
 
 let client;
 let shuttingDown = false;
@@ -774,17 +774,23 @@ async function handleTicketButton(interaction) {
       await interaction.editReply(v2Payload({content:"Tiket sudah ditutup sebelumnya.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
       return;
     }
-    await db.collection("tickets").updateOne({_id:freshTicket._id,status:"open"},{$set:{status:"closed",closedAt:new Date(),closedBy:interaction.user.id}});
-    await interaction.channel.permissionOverwrites.edit(freshTicket.buyerId,{ViewChannel:false,SendMessages:false}).catch(error=>logError("ticket-close-permissions",error));
-    await interaction.channel.setName(("closed-"+interaction.channel.name).slice(0,100)).catch(error=>logError("ticket-close-rename",error));
-    await interaction.editReply(v2Payload({content:"Tiket berhasil ditutup dan channel dikunci. Terima kasih.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
-    await interaction.channel.send(v2SendPayload("🔒 Tiket ditutup oleh <@"+interaction.user.id+">. Channel ini sekarang terkunci."));
-    await audit("ticket.closed",interaction,{ticketId:String(freshTicket._id),channelId:interaction.channelId,buyerId:freshTicket.buyerId});
+    try {
+      await archiveAndDeleteTicket({
+        channel: interaction.channel, ticket: freshTicket, client,
+        closedBy: interaction.user.id, reason: "manual_ticket_close",
+      });
+      await interaction.followUp(v2Payload({content:"Tiket ditutup. Transcript HTML sudah disimpan dan channel tiket dihapus.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
+      await audit("ticket.closed",interaction,{ticketId:String(freshTicket._id),channelId:interaction.channelId,buyerId:freshTicket.buyerId});
+    } catch (error) {
+      logError("ticket-archive-delete", error);
+      await interaction.followUp(v2Payload({content:"Tiket belum dihapus karena transcript gagal disimpan. Pastikan TRANSCRIPT_CHANNEL_ID sudah benar dan bot punya izin mengirim file serta menghapus channel.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
+    }
   }
 }
 
 async function handleInteraction(interaction) {
-  if ((interaction.isButton() || interaction.isStringSelectMenu()) && (interaction.customId.startsWith("rapstore:order:") || interaction.customId.startsWith("rapstore:payment:"))) {
+  if ((interaction.isButton() || interaction.isStringSelectMenu() || interaction.isModalSubmit()) &&
+      (interaction.customId.startsWith("rapstore:order:") || interaction.customId.startsWith("rapstore:payment:") || interaction.customId.startsWith("rapstore:vouch:"))) {
     await handleOrderInteraction(interaction, client); return;
   }
   if (interaction.isButton() && interaction.customId.startsWith("rapstore:ticket:")) {
@@ -875,6 +881,7 @@ async function main() {
   });
   client.once(Events.ClientReady, readyClient => console.log(`Logged in as ${readyClient.user.tag}; MongoDB Atlas ready.`));
   await client.login(config.discordToken);
+  startOrderMaintenance(client);
   try {
     await refreshGlobalCommands();
   } catch (error) {
