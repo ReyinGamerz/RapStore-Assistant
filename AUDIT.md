@@ -2,7 +2,7 @@
 
 ## Status
 
-**PARTIALLY AUDITED — FOLLOW-UP PATCH CI PASS (PR #23, 2026-10-11); LIVE DISCORD/MONGODB TESTS AND DEPENDENCY/SECRET-HISTORY REVIEW STILL REMAIN.**
+**PARTIALLY AUDITED — GLOBAL-ONLY STARTUP FOLLOW-UP PATCH PENDING CI; LIVE DISCORD/MONGODB TESTS AND DEPENDENCY/SECRET-HISTORY REVIEW STILL REMAIN.**
 
 - Repository: `ReyinGamerz/RapStore-Assistant`
 - Base branch/commit: `main` / `55b45b1c7487aa64112425cdc690e3b6f52151c7`
@@ -41,8 +41,8 @@ The audit branch fixes the confirmed runtime defects, shared catalog selection b
 | `src/config.js` | Environment configuration | REVIEWED — UPDATED | Removed obsolete guild ID setting |
 | `src/database.js` | MongoDB connection and indexes | UPDATED — CI PASS | Added a unique `{guildId, channelId, userId}` index for public per-user catalog panel references; actual Atlas index state has not been inspected |
 | `src/commands.js` | Slash command definitions | REVIEWED | Defines `/catalog` and `/panel` |
-| `src/global-commands.js` | Command deployment | REVIEWED — FIXED, CI PASS; LIVE DISCORD BLOCKED | Global registration plus cleanup of legacy guild registrations |
-| `src/deploy-commands.js` | Manual command refresh | REVIEWED — FIXED, CI PASS; LIVE DISCORD BLOCKED | Enumerates current guilds and destroys the temporary client in `finally` |
+| `src/global-commands.js` | Command deployment | UPDATED — CI PENDING | Startup registers global commands only; legacy guild command cleanup is opt-in for manual refresh |
+| `src/deploy-commands.js` | Manual command refresh | UPDATED — CI PENDING | Explicit `npm run commands:refresh` refreshes global commands and clears legacy guild-scoped copies; temporary client destroyed in `finally` |
 | `src/ui.js` | Components V2 UI builders/text splitting | REVIEWED | No live Discord visual test |
 | `test/security.test.js` | Security helper unit tests | REVIEWED — PASS CI | Includes vouch deadline boundary tests; latest CI run [#38048815221](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38048815221) passed |
 | `test/ticket-recovery.test.js` | Missing-channel recovery regression tests | ADDED — PASS CI | Tests shared timestamp and invalid identifiers |
@@ -67,9 +67,11 @@ npm start
        -> category data normalization
        -> Discord login and event registration
        -> order maintenance
-       -> global slash-command refresh
-            -> overwrite global command set
-            -> clear old guild-scoped commands in enumerable guilds
+       -> global slash-command refresh (global endpoint only)
+
+npm run commands:refresh
+  -> overwrite global command set
+  -> one-time/explicit cleanup of old guild-scoped commands in enumerable guilds
 
 /catalog -> Founder/Admin handler check -> public persistent base catalog
 /panel   -> Founder/Admin handler check -> ephemeral management panel
@@ -129,7 +131,7 @@ Role IDs, channel overwrites, and bot permissions still require live-server veri
 6. Changed previously silent audit-log insert failures to write a sanitized error message to the process log.
 7. Removed unused `LOG_LEVEL`, the unused `v2SendPayload` helper, and the unused `ticketNumber` initializer argument; limited the CI token to `contents: read`.
 8. Added a stop function for order maintenance; shutdown clears the interval and waits for the active maintenance run before closing MongoDB.
-9. Migrated slash-command deployment to global registration; attempts to remove legacy guild-scoped copies only in guilds the bot currently enumerates. Cleanup errors are surfaced instead of reporting success.
+9. Kept bot startup strictly global-only: startup calls the global application-command endpoint and does not touch guild command endpoints. Legacy guild-scoped copies are cleared only when explicitly running `npm run commands:refresh`; cleanup errors are surfaced instead of reporting success.
 10. Removed `DISCORD_GUILD_ID` from runtime config and the example environment.
 11. Kept `npm test`, `npm run check`, and `npm run validate` available as manual validation commands; current `npm start` directly executes the bot entry point.
 12. Updated README instructions to match the actual deployment flow.
@@ -156,7 +158,7 @@ No production Discord server, MongoDB database, or VPS was modified.
 - Latest verified follow-up CI run [#38128458526](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38128458526) passed `npm install --ignore-scripts`, production dependency advisory check (`npm audit --omit=dev --audit-level=high`), unit tests, and configured syntax checks. This threshold check passing means no production dependency advisory at High or Critical severity blocked CI; it is not a full security guarantee. Live behavior and exhaustive security-history checks remain unverified.
 - No package lockfile exists. Dependency versions are not fully reproducible until a lockfile is generated and committed in an environment with registry access.
 - Production dependency advisories were checked at High/Critical threshold in CI; development dependency advisories and exhaustive secret scanning of commit history remain unverified.
-- Global command propagation can take time. Legacy guild command cleanup only covers guilds the bot can currently enumerate.
+- Global command propagation can take time. Explicit legacy guild-command cleanup only covers guilds the bot can currently enumerate. Normal `npm start` does not perform guild-scoped API calls.
 - Discord role/channel permissions, Components V2 payloads, transcript uploads, and MongoDB concurrency need controlled live tests.
 - The new catalog flow needs a live Discord smoke test to verify the shared base message stays unchanged, each owner-bound public panel keeps independent category state, and other users cannot edit another member's panel. These panels are visible to everyone in the channel by design; only interaction control is owner-bound.
 - Production database documents and indexes were not inspected. Do not run destructive migrations or drop indexes without backup and approval.
@@ -184,6 +186,6 @@ Never share `.env`, tokens, MongoDB URI, payment credentials, or private logs. A
 
 ## J. Conclusion
 
-Current status: **PARTIALLY AUDITED — FOLLOW-UP PATCH CI PASS; LIVE INTEGRATION AND DEPENDENCY REPRODUCIBILITY/SECRET-HISTORY REVIEW REMAIN.**
+Current status: **PARTIALLY AUDITED — GLOBAL-ONLY STARTUP FOLLOW-UP PATCH PENDING CI; LIVE INTEGRATION AND DEPENDENCY REPRODUCIBILITY/SECRET-HISTORY REVIEW REMAIN.**
 
 This report does not claim 100% safety, full E2E coverage, or production verification. Upgrade the status only after CI results are checked and remaining inventory/integration limitations are addressed.
