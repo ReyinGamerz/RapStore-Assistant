@@ -642,12 +642,11 @@ function buildPaymentInstruction(order, method, payment, statusNote = "") {
 
 function formatLogProductName(value) {
   const name = clean(value || "Belum dipilih", 100);
-  if (/server\\s*boost/i.test(name)) {
-    return name.replace(/\\b(\\d+x)\\b/g, "`$1`").replace(/\\b(\\d+)\\s+Month\\b/gi, "`$1` Month");
+  if (/server\s*boost/i.test(name)) {
+    return name.replace(/\b(\d+x)\b/g, "`$1`").replace(/\b(\d+)\s+Month\b/gi, "`$1` Month");
   }
   return escapeDiscordMarkdown(name);
 }
-
 function buildOrderLog(order) {
   const container = new ContainerBuilder();
   const date = new Date(order.completedAt || order.createdAt || Date.now()).toLocaleDateString("en-GB", { timeZone: "Asia/Jakarta", day: "2-digit", month: "2-digit", year: "numeric" });
