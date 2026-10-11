@@ -1256,8 +1256,8 @@ async function publishPendingVouches(client) {
       const message = clean(vouch.message || "vouch otomatis setelah 1 jam.", 700).replace(/\r/g, "");
       const quotedMessage = message.split("\n").map(line => "> " + escapeDiscordMarkdown(line)).join("\n");
       const date = new Date(vouch.createdAt || Date.now()).toLocaleDateString("en-GB", {
-        timeZone: "Asia/Jakarta", day: "2-digit", month: "short", year: "numeric",
-      }).toUpperCase();
+        timeZone: "Asia/Jakarta", day: "2-digit", month: "2-digit", year: "numeric",
+      });
       const marker = "RAP-VOUCH-KEY:" + clean(vouch.orderCode || "legacy", 40);
       const hiddenMarker = encodeInvisibleMarker(marker);
       let existingMessage = null;
