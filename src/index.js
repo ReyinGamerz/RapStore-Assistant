@@ -354,38 +354,60 @@ async function handleAddEmojiCommand(interaction) {
     const existingNames = new Set(interaction.guild.emojis.cache.map(emoji => emoji.name));
     const added = [];
     const failed = [];
-    const uploadDelayMs = 1500;
+    const uploadDelayMs = 2500;
     let uploadAttempts = 0;
     for (const file of files) {
       if (existingNames.has(file.name)) {
         skipped.push(file.filename + ": nama emoji " + file.name + " sudah digunakan");
         continue;
       }
-      // Space out uploads to reduce the chance of hitting Discord's emoji-create rate limit.
+      // Keep uploads 2.5 seconds apart; honor Discord's retry_after if a 429 occurs.
       if (uploadAttempts > 0) {
         await new Promise(resolve => setTimeout(resolve, uploadDelayMs));
       }
       uploadAttempts++;
+      const createEmoji = () => interaction.guild.emojis.create({
+        attachment: file.data,
+        name: file.name,
+        reason: "Emoji import requested by Founder " + interaction.user.id,
+      });
       try {
-        await interaction.guild.emojis.create({
-          attachment: file.data,
-          name: file.name,
-          reason: "Emoji import requested by Founder " + interaction.user.id,
-        });
+        try {
+          await createEmoji();
+        } catch (error) {
+          const retryAfter = Number(error?.retry_after ?? error?.rawError?.retry_after ?? error?.data?.retry_after);
+          const isRateLimited = Number(error?.status) === 429 || Number(error?.httpStatus) === 429 || Number(error?.statusCode) === 429;
+          if (!isRateLimited || !Number.isFinite(retryAfter) || retryAfter <= 0) throw error;
+          const waitMs = Math.ceil(retryAfter * 1000) + 250;
+          console.warn("[addemoji] Discord rate limit for " + file.name + "; waiting " + waitMs + "ms before one retry.");
+          await new Promise(resolve => setTimeout(resolve, waitMs));
+          await createEmoji();
+        }
         existingNames.add(file.name);
         added.push(file.name);
       } catch (error) {
-        failed.push(file.name + ": " + String(error?.message || "gagal ditambahkan").slice(0, 120));
+        const code = error?.code ? " (kode " + error.code + ")" : "";
+        failed.push(file.filename + " [" + file.name + "]: " + String(error?.message || "gagal ditambahkan").slice(0, 160) + code);
       }
     }
 
+    const summarize = (label, items) => {
+      if (!items.length) return [];
+      const detailLimit = 18;
+      const details = items.slice(0, detailLimit).map(item => String(item));
+      if (items.length > detailLimit) details.push("…dan " + (items.length - detailLimit) + " lainnya");
+      return ["", label + " (" + items.length + "):", ...details];
+    };
     const lines = [
-      "Berhasil ditambahkan: **" + added.length + "**",
-      added.length ? added.map(name => "`:" + name + ":`").join(", ").slice(0, 1200) : "Tidak ada emoji yang berhasil ditambahkan.",
+      "File terbaca: **" + files.length + "** | Berhasil: **" + added.length + "**",
+      "Dilewati: **" + skipped.length + "** | Gagal: **" + failed.length + "**",
     ];
-    if (failed.length) lines.push("", "Gagal: " + failed.slice(0, 10).join("; ").slice(0, 1000));
-    if (skipped.length) lines.push("", "Dilewati: " + skipped.slice(0, 10).join("; ").slice(0, 1000));
-    await interaction.editReply({ flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral, components: [buildPanel("HASIL IMPORT EMOJI", lines.join("\n"))] });
+    lines.push(...summarize("Emoji berhasil", added.map(name => ":" + name + ":")));
+    lines.push(...summarize("Gagal", failed));
+    lines.push(...summarize("Dilewati", skipped));
+    let report = lines.join("\n");
+    if (report.length > 3900) report = report.slice(0, 3850) + "\n…Laporan dipotong karena batas tampilan Discord.";
+    await interaction.editReply({ flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral, components: [buildPanel("HASIL IMPORT EMOJI", report)] });
   } catch (error) {
     logError("founder-add-emoji", error);
     await interaction.editReply(v2Payload({
