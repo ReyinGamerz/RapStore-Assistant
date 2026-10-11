@@ -63,10 +63,12 @@ export async function setupServer(guild) {
         mentionable: false,
         reason: "/setupserver role setup",
       });
-    } else if (name === "Founder" || name === "Admin") {
-      // Do not silently grant Administrator to an existing role; only create safe overwrite defaults.
-      roleMap.set(name, role);
-      continue;
+    } else {
+      await role.edit({
+        permissions: ROLE_PERMISSIONS[name] || [],
+        mentionable: false,
+        reason: "/setupserver role permission sync",
+      });
     }
     roleMap.set(name, role);
   }
