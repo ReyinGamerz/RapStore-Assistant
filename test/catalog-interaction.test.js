@@ -110,3 +110,13 @@ test("catalog uses the requested custom alur and Catalog emojis", () => {
   assert.match(source, /### <:Catalog:1558470276981850132> RAPSTORE — CATALOG/);
   assert.doesNotMatch(source, /<:alur:1553800809198649344>/);
 });
+
+
+test("emoji removal replaces confirmation with progress and creates multiple 25-option dropdowns", () => {
+  assert.match(source, /SEDANG MENGHAPUS EMOJI/);
+  assert.match(source, /await interaction\.update\(\{[\s\S]*?SEDANG MENGHAPUS EMOJI/);
+  assert.match(source, /for \(let offset = 0; offset < emojis\.length; offset \+= 25\)/);
+  assert.match(source, /setCustomId\("rapstore:emoji:remove:select:" \+ index\)/);
+  assert.match(source, /chunks\.length > 5/);
+  assert.match(source, /startsWith\("rapstore:emoji:remove:select:"\)/);
+});
