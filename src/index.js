@@ -507,8 +507,7 @@ async function refreshPersistentPanels(readyClient, onlyType = null) {
     console.error("[persistent-panel-startup-sync] Configured GUILD_ID " + config.guildId + " is not available to this bot; skipping panel sync.");
     return;
   }
-  {
-    for (const type of types) {
+  for (const type of types) {
       try {
         const channelId = configuredPanelChannelId(type);
         const record = await db.collection("persistent_panels").findOne({ guildId: guild.id, type });
@@ -520,7 +519,6 @@ async function refreshPersistentPanels(readyClient, onlyType = null) {
         logError("persistent-panel-startup-sync-" + type + "-" + guild.id, error);
       }
     }
-  }
 
   if (!onlyType) {
     const legacyPanels = await db.collection("catalog_user_panels").find({}).toArray();
@@ -1403,7 +1401,7 @@ async function main() {
   stopOrderMaintenance = startOrderMaintenance(client);
   try {
     if (!readyClient.guilds.cache.has(config.guildId)) throw new Error("Bot tidak tergabung di GUILD_ID " + config.guildId);
-    await refreshGuildCommands();
+    await refreshGuildCommands({ guildIds: [...readyClient.guilds.cache.keys()] });
   } catch (error) {
     logError("global-command-refresh", error);
     console.error("Bot tetap berjalan, tetapi refresh global slash commands belum selesai. Periksa izin aplikasi bot dan jalankan npm run commands:refresh lagi.");
