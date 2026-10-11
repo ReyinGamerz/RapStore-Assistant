@@ -642,25 +642,22 @@ function buildPaymentInstruction(order, method, payment, statusNote = "") {
 
 function buildOrderLog(order) {
   const container = new ContainerBuilder();
-  const date = new Date(order.createdAt || Date.now()).toLocaleDateString("en-GB", { timeZone: "Asia/Jakarta", day: "2-digit", month: "2-digit", year: "numeric" });
+  const date = new Date(order.completedAt || order.createdAt || Date.now()).toLocaleDateString("en-GB", { timeZone: "Asia/Jakarta", day: "2-digit", month: "2-digit", year: "numeric" });
   const amount = Number(order.amount || 1).toLocaleString("id-ID");
   const total = Number(order.totalPrice || 0).toLocaleString("id-ID");
   const tick = String.fromCharCode(96);
-  container.addTextDisplayComponents(new TextDisplayBuilder().setContent("# RAPSTORE — ORDER LOGS\n## STATUS: " + tick + clean(order.status || "ON HOLD", 30) + tick));
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent("# <:rap14:1558865884515143772> ORDER LOGS <:rap14:1558865884515143772>"));
   divider(container);
   container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
-    "<:people:1549409947215728690> **Buyer**\n" +
-    "<:alur:1558458209977499740> <@" + clean(order.buyerId, 30) + ">\n\n" +
-    "<:box:1551492070051553290> **Jenis Product**\n" +
-    "<:alur:1558458209977499740> " + tick + clean(order.productName || "Belum dipilih", 100) + tick + "\n\n" +
-    "<a:bintang:1558403940977082448> **Jumlah**\n" +
-    "<:alur:1558458209977499740> " + tick + amount + tick + "\n\n" +
-    "<:uang:1552535412579508325> **Harga**\n" +
-    "<:alur:1558458209977499740> " + tick + total + tick + "\n\n" +
-    "<a:jam:1549673401881333841> **Date**\n" +
-    "<:alur:1558458209977499740> " + tick + date + tick + "\n\n" +
-    "**Order ID**\n<:alur:1558458209977499740> " + tick + clean(order.orderCode || "", 40) + tick
+    "<:rap38:1558867687537381547> Name: <@" + clean(order.buyerId, 30) + ">\\n" +
+    "<:rap10:1558865612908924938> Product: " + clean(order.productName || "Belum dipilih", 100) + " " + tick + amount + tick + "\\n" +
+    "<:rap23:1558866296043601920> Amount: " + tick + amount + tick + "\\n" +
+    "<:rap39:1558867720290828288> Price: " + tick + "Rp" + total + tick + "\\n" +
+    "<:rap7:1558866234374619178> Status: " + tick + clean(order.status || "ON HOLD", 30) + tick + "\\n" +
+    "<:rap30:1558867401255292958> Date: " + tick + date + tick
   ));
+  divider(container);
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent("-# Fast, Trusted, Professional"));
   return v2(container);
 }
 
@@ -1279,21 +1276,20 @@ async function publishPendingVouches(client) {
         before = recent.last().id;
         if (recent.size < 100) break;
       }
+      const tick = String.fromCharCode(96);
       const panel = new ContainerBuilder();
-      panel.addTextDisplayComponents(new TextDisplayBuilder().setContent("## RAP — CUSTOMER TESTIMONI\n-# VERIFIED TRANSACTION"));
+      panel.addTextDisplayComponents(new TextDisplayBuilder().setContent("## <:rap22:1558866197104169120> RAP - VOUCH <:rap22:1558866197104169120>"));
       divider(panel);
       panel.addTextDisplayComponents(new TextDisplayBuilder().setContent(
-        "**CLIENT**\n<@" + vouch.buyerId + ">\n\n" +
-        "**PRODUCT**\n" + escapeDiscordMarkdown(clean(vouch.productName || "Produk RapStore", 100)) + "\n\n" +
-        "**RATING**\n" + stars + " (" + rating + "/5)\n\n" +
-        "**PESAN & KESAN**\n" + quotedMessage,
+        "<:rap38:1558867687537381547> Name: <@" + vouch.buyerId + ">\\n" +
+        "<:rap10:1558865612908924938> Product: " + escapeDiscordMarkdown(clean(vouch.productName || "Produk RapStore", 100)) + "\\n" +
+        "<:rap49:1558868051150245969> Rating: " + stars + " (" + rating + "/5)\\n" +
+        "<:rap25:1558867090817941574> Pesan & Kesan\\n" +
+        "```" + message.replace(/```/g, "` ​``").slice(0, 900) + "```\\n" +
+        "<:rap30:1558867401255292958> Date: " + tick + date + tick
       ));
       divider(panel);
-      panel.addTextDisplayComponents(new TextDisplayBuilder().setContent("> Thank you for trusting **RAP**."));
-      divider(panel);
-      panel.addTextDisplayComponents(new TextDisplayBuilder().setContent(
-        "-# Trusted. Fast. Secure. Professional.\n-# RAP TESTIMONI • " + date + hiddenMarker,
-      ));
+      panel.addTextDisplayComponents(new TextDisplayBuilder().setContent("-# Fast, Trusted, Professional" + hiddenMarker));
       const sent = existingMessage || await channel.send({
         flags: V2, components: [panel],
         allowedMentions: { parse: [], users: [], roles: [] },
