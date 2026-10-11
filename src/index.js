@@ -1421,9 +1421,10 @@ async function handleBulkProductImport(interaction) {
     const { parseProductCsv } = await import("./product-import.js");
     const parsed = parseProductCsv(raw.toString("utf8"));
     const db = getDatabase();
-    const categoryNames = new Set((await getProductCategories()).map(item => item.name.toLocaleLowerCase("id-ID")));
-    const unknown = [...new Set(parsed.map(item => item.category).filter(name => !categoryNames.has(name.toLocaleLowerCase("id-ID"))))];
+    const categoryMap = new Map((await getProductCategories()).map(item => [item.name.toLocaleLowerCase("id-ID"), item.name]));
+    const unknown = [...new Set(parsed.map(item => item.category).filter(name => !categoryMap.has(name.toLocaleLowerCase("id-ID"))))];
     if (unknown.length) throw new Error("Kategori belum ada di database: " + unknown.join(", ") + ". Buat kategori lewat /panel terlebih dahulu. Tidak ada produk yang diimport.");
+    for (const item of parsed) item.category = categoryMap.get(item.category.toLocaleLowerCase("id-ID"));
     const existing = await db.collection("products").find({}, { projection: { name: 1, category: 1 } }).toArray();
     const keys = new Set(existing.map(item => String(item.name || "").toLocaleLowerCase("id-ID") + "\u0000" + String(item.category || "").toLocaleLowerCase("id-ID")));
     const unique = [];
