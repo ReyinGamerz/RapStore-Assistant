@@ -2,7 +2,7 @@
 
 ## Status
 
-**PARTIALLY AUDITED — FOLLOW-UP PATCH (2026-10-11): CI VALIDATION PENDING; LIVE DISCORD/MONGODB TESTS AND DEPENDENCY/SECRET-HISTORY REVIEW STILL REMAIN.**
+**PARTIALLY AUDITED — FOLLOW-UP PATCH CI PASS (PR #23, 2026-10-11); LIVE DISCORD/MONGODB TESTS AND DEPENDENCY/SECRET-HISTORY REVIEW STILL REMAIN.**
 
 - Repository: `ReyinGamerz/RapStore-Assistant`
 - Base branch/commit: `main` / `55b45b1c7487aa64112425cdc690e3b6f52151c7`
@@ -33,22 +33,22 @@ The audit branch fixes the confirmed runtime defects, shared catalog selection b
 
 | Path | Role | Status | Notes |
 |---|---|---|---|
-| `src/index.js` | Startup, interaction routing, panels, catalog, ticket creation/close, Discord events | UPDATED — CI PENDING | Public base catalog now creates/updates one owner-bound non-ephemeral panel per user/channel; navigation uses a wrap helper; live interactions remain untested |
-| `src/order-system.js` | Order/payment/vouch/transcript lifecycle and maintenance | UPDATED — CI PENDING | Removed the extra `INFO PESANAN` message from order-ticket initialization; order/payment lifecycle still needs live verification |
+| `src/index.js` | Startup, interaction routing, panels, catalog, ticket creation/close, Discord events | UPDATED — CI PASS | Public base catalog now creates/updates one owner-bound non-ephemeral panel per user/channel; saved panels sync after catalog refresh/restart; live interactions remain untested |
+| `src/order-system.js` | Order/payment/vouch/transcript lifecycle and maintenance | UPDATED — CI PASS | Removed the extra `INFO PESANAN` message from order-ticket initialization; order/payment lifecycle still needs live verification |
 | `src/security.js` | Staff/owner checks, attachment validation, transcript limits, payment reconciliation, vouch deadline helper | REVIEWED — UPDATED | Deadline helper has boundary tests; production behavior not live-tested |
 | `src/ticket-recovery.js` | Missing-ticket state reconciliation | ADDED — CI PASS | Shared timestamp; injected database dependency for regression testing |
-| `src/catalog-state.js`, `test/catalog-state.test.js` | Category navigation wraparound | ADDED — CI PENDING | Tests last-to-first NEXT, first-to-last PREV, one category, empty count, and invalid/stale indexes |
+| `src/catalog-state.js`, `test/catalog-state.test.js` | Category navigation wraparound | ADDED — CI PASS | Tests last-to-first NEXT, first-to-last PREV, one category, empty count, and invalid/stale indexes |
 | `src/config.js` | Environment configuration | REVIEWED — UPDATED | Removed obsolete guild ID setting |
-| `src/database.js` | MongoDB connection and indexes | UPDATED — CI PENDING | Added a unique `{guildId, channelId, userId}` index for public per-user catalog panel references; actual Atlas index state has not been inspected |
+| `src/database.js` | MongoDB connection and indexes | UPDATED — CI PASS | Added a unique `{guildId, channelId, userId}` index for public per-user catalog panel references; actual Atlas index state has not been inspected |
 | `src/commands.js` | Slash command definitions | REVIEWED | Defines `/catalog` and `/panel` |
 | `src/global-commands.js` | Command deployment | REVIEWED — FIXED, CI PASS; LIVE DISCORD BLOCKED | Global registration plus cleanup of legacy guild registrations |
 | `src/deploy-commands.js` | Manual command refresh | REVIEWED — FIXED, CI PASS; LIVE DISCORD BLOCKED | Enumerates current guilds and destroys the temporary client in `finally` |
 | `src/ui.js` | Components V2 UI builders/text splitting | REVIEWED | No live Discord visual test |
 | `test/security.test.js` | Security helper unit tests | REVIEWED — PASS CI | Includes vouch deadline boundary tests; latest CI run [#38048815221](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38048815221) passed |
 | `test/ticket-recovery.test.js` | Missing-channel recovery regression tests | ADDED — PASS CI | Tests shared timestamp and invalid identifiers |
-| `package.json` | Runtime/dependencies/npm scripts | UPDATED — CI PENDING | `npm start` directly runs `node src/index.js`; tests/checks remain manual commands, and syntax checks include `src/catalog-state.js` |
+| `package.json` | Runtime/dependencies/npm scripts | UPDATED — CI PASS | `npm start` directly runs `node src/index.js`; tests/checks remain manual commands, and syntax checks include `src/catalog-state.js` |
 | `.github/workflows/ci.yml` | GitHub Actions | REVIEWED — PASS | Explicit `contents: read` workflow token permission and production dependency advisory check; latest run [#38048815221](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38048815221) passed |
-| `README.md` | Setup/operation guide | UPDATED — CI PENDING | Documents direct `npm start`, manual test/check commands, and public non-ephemeral owner-bound catalog panels |
+| `README.md` | Setup/operation guide | UPDATED — CI PASS | Documents direct `npm start`, manual test/check commands, and public non-ephemeral owner-bound catalog panels |
 | `AUDIT.md` | Audit log/report | REVIEWED — UPDATED | Records scope, findings, remediation, CI evidence, and residual risks |
 | `.env.example` | Environment template | REVIEWED — UPDATED | Removed `DISCORD_GUILD_ID` |
 | `.gitignore` | Local secret/runtime exclusions | REVIEWED | Ignores `.env` and `.env.*`, with `.env.example` explicitly allowed |
@@ -140,11 +140,10 @@ No production Discord server, MongoDB database, or VPS was modified.
 
 | Test | Type | Result | Evidence/notes |
 |---|---|---|---|
-| Existing `test/security.test.js` | Unit | PASS | Unit tests passed in latest source validation run [#38048874980](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38048874980) |
-| New `test/ticket-recovery.test.js` | Regression unit | PASS | Added on audit branch and passed in latest source validation run [#38048874980](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38048874980) |
-| New `test/catalog-state.test.js` | Regression unit | CI PENDING | New tests for category wraparound and invalid/stale indexes |
-| New `test/catalog-state.test.js` | Regression unit | CI PENDING | Tests wraparound, one category, empty lists, and invalid/stale indexes |
-| `npm run check` | Syntax | PASS | All configured `node --check` commands passed in latest source validation run [#38048874980](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38048874980) |
+| Existing `test/security.test.js` | Unit | PASS | Latest follow-up CI [#38128458526](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38128458526) passed |
+| New `test/ticket-recovery.test.js` | Regression unit | PASS | Latest follow-up CI [#38128458526](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38128458526) passed |
+| New `test/catalog-state.test.js` | Regression unit | PASS | Latest follow-up CI [#38128458526](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38128458526) passed wrap-around and invalid/stale-index tests |
+| `npm run check` | Syntax | PASS | All configured `node --check` commands passed in follow-up CI [#38128458526](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38128458526) |
 | Maintenance shutdown | Static review | PASS (code review) | Timer clear and active-run wait are wired; no live shutdown test |
 | Vouch deadline | Unit regression | PASS | Boundary tests for before/at/after deadline and invalid dates passed in [CI run #38048815221](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38048815221) |
 | Global command refresh | Discord integration | BLOCKED | Requires real bot token and Discord API |
@@ -154,7 +153,7 @@ No production Discord server, MongoDB database, or VPS was modified.
 
 ## H. Residual risks
 
-- Latest verified source CI run [#38048874980](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38048874980) passed `npm install --ignore-scripts`, production dependency advisory check (`npm audit --omit=dev --audit-level=high`), unit tests, and configured syntax checks. This threshold check passing means no production dependency advisory at High or Critical severity blocked CI; it is not a full security guarantee. Live behavior and exhaustive security-history checks remain unverified.
+- Latest verified follow-up CI run [#38128458526](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38128458526) passed `npm install --ignore-scripts`, production dependency advisory check (`npm audit --omit=dev --audit-level=high`), unit tests, and configured syntax checks. This threshold check passing means no production dependency advisory at High or Critical severity blocked CI; it is not a full security guarantee. Live behavior and exhaustive security-history checks remain unverified.
 - No package lockfile exists. Dependency versions are not fully reproducible until a lockfile is generated and committed in an environment with registry access.
 - Production dependency advisories were checked at High/Critical threshold in CI; development dependency advisories and exhaustive secret scanning of commit history remain unverified.
 - Global command propagation can take time. Legacy guild command cleanup only covers guilds the bot can currently enumerate.
@@ -185,6 +184,6 @@ Never share `.env`, tokens, MongoDB URI, payment credentials, or private logs. A
 
 ## J. Conclusion
 
-Current status: **PARTIALLY AUDITED — FOLLOW-UP PATCH VALIDATION PENDING; LIVE INTEGRATION AND DEPENDENCY REPRODUCIBILITY/SECRET-HISTORY REVIEW REMAIN.**
+Current status: **PARTIALLY AUDITED — FOLLOW-UP PATCH CI PASS; LIVE INTEGRATION AND DEPENDENCY REPRODUCIBILITY/SECRET-HISTORY REVIEW REMAIN.**
 
 This report does not claim 100% safety, full E2E coverage, or production verification. Upgrade the status only after CI results are checked and remaining inventory/integration limitations are addressed.
