@@ -7,4 +7,8 @@ export const commandDefinitions = [
     .setName("addemoji")
     .setDescription("Founder: tambahkan emoji dari gambar atau ZIP ke server.")
     .addAttachmentOption(option => option.setName("file").setDescription("File PNG, GIF, JPG, atau ZIP berisi emoji").setRequired(true)),
+  new SlashCommandBuilder()
+    .setName("addemoji")
+    .setDescription("Founder: tambahkan emoji dari gambar atau ZIP ke server.")
+    .addAttachmentOption(option => option.setName("file").setDescription("File PNG, GIF, JPG, atau ZIP berisi emoji").setRequired(true)),
 ];
