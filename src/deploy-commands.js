@@ -8,7 +8,7 @@ try {
   const ready = new Promise(resolve => client.once(Events.ClientReady, resolve));
   await client.login(config.discordToken);
   const readyClient = client.isReady() ? client : await ready;
-  await refreshGlobalCommands({ guildIds: [...readyClient.guilds.cache.keys()] });
+  await refreshGlobalCommands({ guildIds: [...readyClient.guilds.cache.keys()], cleanupGuildCommands: true });
 } catch (error) {
   console.error("Global slash command refresh failed:", error instanceof Error ? error.message : error);
   process.exitCode = 1;
