@@ -83,18 +83,15 @@ export async function setupServer(guild) {
   const created = [];
 
   for (const section of LAYOUT) {
+    const categoryAllowed = section.name.includes("STAFF") ? staffRoles : publicRoles;
     const categoryOverwrites = [
       { id: everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
       ...publicRoles.map(name => ({
         id: roleMap.get(name).id,
-        allow: section.name.includes("STAFF") ? [] : [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory],
+        allow: categoryAllowed.includes(name) ? [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory] : [],
+        deny: categoryAllowed.includes(name) ? [] : [PermissionFlagsBits.ViewChannel],
       })),
     ];
-    if (section.name.includes("STAFF")) {
-      for (const name of staffRoles) categoryOverwrites.push({ id: roleMap.get(name).id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory] });
-    } else {
-      for (const name of publicRoles) categoryOverwrites.push({ id: roleMap.get(name).id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory] });
-    }
     const category = await guild.channels.create({ name: section.name, type: ChannelType.GuildCategory, permissionOverwrites: categoryOverwrites, reason: "/setupserver layout" });
     created.push(category.name);
     for (const spec of section.channels) {
