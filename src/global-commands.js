@@ -5,20 +5,20 @@ import { commandDefinitions } from "./commands.js";
 const rest = new REST({ version: "10" }).setToken(config.discordToken);
 
 /**
- * Register slash commands globally and clear legacy guild-scoped copies from
- * every guild the bot can currently enumerate. Runtime authorization in the
- * interaction handlers remains the security boundary.
+ * Register slash commands globally. Startup only updates the global command
+ * set; legacy guild-scoped copies are cleared only during an explicit manual
+ * command refresh. Runtime authorization in handlers remains authoritative.
  */
-export async function refreshGlobalCommands({ guildIds = [] } = {}) {
+export async function refreshGlobalCommands({ guildIds = [], cleanupGuildCommands = false } = {}) {
   const body = commandDefinitions.map(command => command.toJSON());
   const registered = await rest.put(
     Routes.applicationCommands(config.discordClientId),
     { body },
   );
 
-  const uniqueGuildIds = [...new Set(
-    guildIds.map(id => String(id || "").trim()).filter(id => /^\d{17,20}$/.test(id)),
-  )];
+  const uniqueGuildIds = cleanupGuildCommands
+    ? [...new Set(guildIds.map(id => String(id || "").trim()).filter(id => /^\d{17,20}$/.test(id)))]
+    : [];
   const cleanupErrors = [];
 
   for (const guildId of uniqueGuildIds) {
@@ -45,8 +45,12 @@ export async function refreshGlobalCommands({ guildIds = [] } = {}) {
   }
 
   const count = Array.isArray(registered) ? registered.length : body.length;
-  console.log(
-    `Global slash commands refreshed: ${count}. Removed legacy guild-scoped commands from ${uniqueGuildIds.length} guild(s); staff access remains enforced in handlers.`,
-  );
+  if (cleanupGuildCommands) {
+    console.log(
+      `Global slash commands refreshed: ${count}. Cleared legacy guild-scoped commands from ${uniqueGuildIds.length} guild(s); staff access remains enforced in handlers.`,
+    );
+  } else {
+    console.log(`Global slash commands refreshed: ${count}. Global-only mode; guild-scoped commands are not registered.`);
+  }
   return registered;
 }
