@@ -915,7 +915,7 @@ async function buildCatalogPayload(selectedCategory = "", selectedProductId = ""
           ? name.replace(/\b(\d+x)\b/g, "`$1`").replace(/\b(\d+)\s+Month\b/gi, "`$1` Month")
           : name;
         lines.push("**" + (safeText(product.emoji,100) ? safeText(product.emoji,100) + " " : "") + displayName + "**");
-        lines.push("<:alur:1558458209977499740> **Harga:** `" + formatPrice(retail).replace(/^Rp\s*/, "Rp") + "`", "");
+        lines.push("<:rap39:1558867720290828288> **Harga:** `" + formatPrice(retail).replace(/^Rp\s*/, "Rp") + "`", "");
       }
     }
   }
