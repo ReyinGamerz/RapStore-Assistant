@@ -14,6 +14,7 @@ import { isStaffMember, canAccessTicket, canManuallyCloseTicket } from "./securi
 import { reconcileMissingTicket } from "./ticket-recovery.js";
 import { wrapCategoryIndex } from "./catalog-state.js";
 import { extractSingleEmojiFile, extractEmojiFilesFromZip } from "./emoji-import.js";
+import { setupServer } from "./setup-server.js";
 import { allocateTicketNumber, initializeOrderTicket, handleOrderInteraction, handleOrderMessage, archiveAndDeleteTicket, startOrderMaintenance } from "./order-system.js";
 
 let client;
@@ -1287,7 +1288,43 @@ async function handleCatalogOrderButton(interaction) {
   await createCatalogOrderTicket(interaction, productId);
 }
 
+async function handleSetupServerCommand(interaction) {
+  if (!interaction.inGuild()) {
+    await interaction.reply({ content: "Perintah ini hanya bisa digunakan di server Discord.", flags: MessageFlags.Ephemeral });
+    return;
+  }
+  const member = interaction.member;
+  const allowed = member?.permissions?.has(PermissionFlagsBits.Administrator) ||
+    member?.permissions?.has(PermissionFlagsBits.ManageGuild) ||
+    hasFounderRole(member);
+  if (!allowed) {
+    await interaction.reply({ content: "Hanya Founder/Admin server yang punya izin Administrator atau Manage Server yang bisa menjalankan /setupserver.", flags: MessageFlags.Ephemeral });
+    return;
+  }
+  if (!interaction.options.getBoolean("konfirmasi_hapus", true)) {
+    await interaction.reply({ content: "Setup dibatalkan. Untuk melanjutkan, jalankan /setupserver dengan konfirmasi_hapus: true.", flags: MessageFlags.Ephemeral });
+    return;
+  }
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  try {
+    const result = await setupServer(interaction.guild);
+    await interaction.editReply({
+      content: "Setup server selesai. Role yang diperiksa/dibuat: " + result.roles +
+        "\nKategori dibuat: " + result.categories +
+        "\nChannel dibuat: " + result.channels +
+        "\n\nCatatan: semua channel/category sebelumnya dihapus. Periksa lagi permission dan role bot sebelum membuka server ke member.",
+      allowedMentions: { parse: [] },
+    });
+  } catch (error) {
+    logError("setupserver", error);
+    await interaction.editReply({ content: "Setup server gagal: " + String(error?.message || "error tidak diketahui").slice(0, 1500) });
+  }
+}
+
 async function handleInteraction(interaction) {
+  if (interaction.isChatInputCommand() && interaction.commandName === "setupserver") {
+    await handleSetupServerCommand(interaction); return;
+  }
   if (interaction.inGuild() && interaction.guildId !== config.guildId) {
     if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
       await interaction.reply({ content: "Bot ini hanya aktif di server toko yang dikonfigurasi.", flags: MessageFlags.Ephemeral });
