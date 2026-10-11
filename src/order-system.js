@@ -649,11 +649,11 @@ function buildOrderLog(order) {
   container.addTextDisplayComponents(new TextDisplayBuilder().setContent("# <:rap14:1558865884515143772> ORDER LOGS <:rap14:1558865884515143772>"));
   divider(container);
   container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
-    "<:rap38:1558867687537381547> Name: <@" + clean(order.buyerId, 30) + ">\\n" +
-    "<:rap10:1558865612908924938> Product: " + clean(order.productName || "Belum dipilih", 100) + " " + tick + amount + tick + "\\n" +
-    "<:rap23:1558866296043601920> Amount: " + tick + amount + tick + "\\n" +
-    "<:rap39:1558867720290828288> Price: " + tick + "Rp" + total + tick + "\\n" +
-    "<:rap7:1558866234374619178> Status: " + tick + clean(order.status || "ON HOLD", 30) + tick + "\\n" +
+    "<:rap38:1558867687537381547> Name: <@" + clean(order.buyerId, 30) + ">\n" +
+    "<:rap10:1558865612908924938> Product: " + clean(order.productName || "Belum dipilih", 100) + " " + tick + amount + tick + "\n" +
+    "<:rap23:1558866296043601920> Amount: " + tick + amount + tick + "\n" +
+    "<:rap39:1558867720290828288> Price: " + tick + "Rp" + total + tick + "\n" +
+    "<:rap7:1558866234374619178> Status: " + tick + clean(order.status || "ON HOLD", 30) + tick + "\n" +
     "<:rap30:1558867401255292958> Date: " + tick + date + tick
   ));
   divider(container);
@@ -1281,11 +1281,11 @@ async function publishPendingVouches(client) {
       panel.addTextDisplayComponents(new TextDisplayBuilder().setContent("## <:rap22:1558866197104169120> RAP - VOUCH <:rap22:1558866197104169120>"));
       divider(panel);
       panel.addTextDisplayComponents(new TextDisplayBuilder().setContent(
-        "<:rap38:1558867687537381547> Name: <@" + vouch.buyerId + ">\\n" +
-        "<:rap10:1558865612908924938> Product: " + escapeDiscordMarkdown(clean(vouch.productName || "Produk RapStore", 100)) + "\\n" +
-        "<:rap49:1558868051150245969> Rating: " + stars + " (" + rating + "/5)\\n" +
-        "<:rap25:1558867090817941574> Pesan & Kesan\\n" +
-        "```" + message.replace(/```/g, "` ​``").slice(0, 900) + "```\\n" +
+        "<:rap38:1558867687537381547> Name: <@" + vouch.buyerId + ">\n" +
+        "<:rap10:1558865612908924938> Product: " + escapeDiscordMarkdown(clean(vouch.productName || "Produk RapStore", 100)) + "\n" +
+        "<:rap49:1558868051150245969> Rating: " + stars + " (" + rating + "/5)\n" +
+        "<:rap25:1558867090817941574> Pesan & Kesan\n" +
+        "```" + message.replace(/```/g, "` ​``").slice(0, 900) + "```\n" +
         "<:rap30:1558867401255292958> Date: " + tick + date + tick
       ));
       divider(panel);
