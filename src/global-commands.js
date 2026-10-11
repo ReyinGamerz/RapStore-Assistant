@@ -4,53 +4,32 @@ import { commandDefinitions } from "./commands.js";
 
 const rest = new REST({ version: "10" }).setToken(config.discordToken);
 
-/**
- * Register slash commands globally. Startup only updates the global command
- * set; legacy guild-scoped copies are cleared only during an explicit manual
- * command refresh. Runtime authorization in handlers remains authoritative.
- */
-export async function refreshGlobalCommands({ guildIds = [], cleanupGuildCommands = false } = {}) {
+/** Register slash commands only in the configured store guild. */
+export async function refreshGuildCommands({ guildIds = [] } = {}) {
   const body = commandDefinitions.map(command => command.toJSON());
   const registered = await rest.put(
-    Routes.applicationCommands(config.discordClientId),
+    Routes.applicationGuildCommands(config.discordClientId, config.guildId),
     { body },
   );
 
-  const uniqueGuildIds = cleanupGuildCommands
-    ? [...new Set(guildIds.map(id => String(id || "").trim()).filter(id => /^\d{17,20}$/.test(id)))]
-    : [];
+  // Clear the old global set and any legacy guild copies outside the configured store guild.
+  await rest.put(Routes.applicationCommands(config.discordClientId), { body: [] });
+  const otherGuildIds = [...new Set(guildIds.map(id => String(id || "").trim()).filter(id => /^\\d{17,20}$/.test(id) && id !== config.guildId))];
   const cleanupErrors = [];
-
-  for (const guildId of uniqueGuildIds) {
+  for (const guildId of otherGuildIds) {
     try {
-      await rest.put(
-        Routes.applicationGuildCommands(config.discordClientId, guildId),
-        { body: [] },
-      );
+      await rest.put(Routes.applicationGuildCommands(config.discordClientId, guildId), { body: [] });
     } catch (error) {
-      cleanupErrors.push({ guildId, error });
+      cleanupErrors.push({ guildId, message: error instanceof Error ? error.message : String(error) });
     }
   }
-
   if (cleanupErrors.length) {
-    for (const item of cleanupErrors) {
-      console.error(
-        `[global-command-refresh] Could not remove legacy guild commands from ${item.guildId}:`,
-        item.error instanceof Error ? item.error.message : item.error,
-      );
-    }
-    throw new Error(
-      `Global commands registered, but legacy guild commands could not be cleared in ${cleanupErrors.length} guild(s). Retry npm run commands:refresh.`,
-    );
+    for (const item of cleanupErrors) console.error("[guild-command-refresh] Could not clear legacy commands from " + item.guildId + ": " + item.message);
+    throw new Error("Guild commands registered, but legacy commands could not be cleared from " + cleanupErrors.length + " other guild(s).");
   }
 
   const count = Array.isArray(registered) ? registered.length : body.length;
-  if (cleanupGuildCommands) {
-    console.log(
-      `Global slash commands refreshed: ${count}. Cleared legacy guild-scoped commands from ${uniqueGuildIds.length} guild(s); staff access remains enforced in handlers.`,
-    );
-  } else {
-    console.log(`Global slash commands refreshed: ${count}. Global-only mode; guild-scoped commands are not registered.`);
-  }
+  console.log(`Guild slash commands refreshed: ${count} in guild ${config.guildId}. Cleared global commands and ${otherGuildIds.length} other guild(s).`);
+
   return registered;
 }
