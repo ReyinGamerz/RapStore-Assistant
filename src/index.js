@@ -995,8 +995,19 @@ async function handleCatalogPageButton(interaction) {
   }
 
   await interaction.deferUpdate();
-  const { categories } = await catalogData(getDatabase());
-  const nextIndex = wrapCategoryIndex(requestedIndex, action, categories.length);
+  const db = getDatabase();
+  const { categories } = await catalogData(db);
+  let currentIndex = requestedIndex;
+  if (ownerId) {
+    const record = await db.collection("catalog_user_panels").findOne({
+      ...catalogPanelIdentity(interaction),
+      messageId: interaction.message.id,
+    });
+    if (record && categories.includes(record.selectedCategory)) {
+      currentIndex = categories.indexOf(record.selectedCategory);
+    }
+  }
+  const nextIndex = wrapCategoryIndex(currentIndex, action, categories.length);
   const category = nextIndex >= 0 ? categories[nextIndex] : "";
 
   if (!ownerId) {
