@@ -5,6 +5,7 @@ export const commandDefinitions = [
   new SlashCommandBuilder().setName("setuptrap").setDescription("Founder/Admin: buat channel anti-spam trap dengan timeout otomatis."),
   new SlashCommandBuilder().setName("catalog").setDescription("Buka katalog produk interaktif."),
   new SlashCommandBuilder().setName("panel").setDescription("Panel Founder/Admin untuk tambah dan edit produk."),
+  new SlashCommandBuilder().setName("importproduk").setDescription("Founder: impor banyak produk dari file CSV ke MongoDB.").addAttachmentOption(option => option.setName("file").setDescription("CSV dengan kolom name,price,category,emoji,description").setRequired(true)),
   new SlashCommandBuilder()
     .setName("addemoji")
     .setDescription("Founder: tambahkan emoji dari gambar atau ZIP ke server.")
