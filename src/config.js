@@ -13,6 +13,7 @@ function optionalId(name, fallback = "") {
 export const config = {
   discordToken: required("DISCORD_TOKEN"),
   discordClientId: required("DISCORD_CLIENT_ID"),
+  guildId: (() => { const id = required("GUILD_ID"); if (!/^\d{17,20}$/.test(id)) throw new Error("GUILD_ID must be a valid Discord server ID"); return id; })(),
   mongoUri: required("MONGODB_URI"),
   mongoDbName: optionalId("MONGODB_DB_NAME", "rapstore"),
   ids: {
