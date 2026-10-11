@@ -326,6 +326,7 @@ async function refreshPersistentPanels(readyClient, onlyType = null) {
       }
     } catch (error) { logError("persistent-panel-sync-" + record.type, error); }
   }
+  await refreshUserCatalogPanels(readyClient);
 }
 async function showCategoryManagePicker(interaction, mode) {
   await interaction.deferReply({ flags: EPHEMERAL | MessageFlags.IsComponentsV2 });
@@ -822,14 +823,60 @@ async function ensureUserCatalogPanel(interaction, selectedCategory = "", select
   });
 }
 
-async function updateOwnedCatalogPanel(interaction, ownerId, selectedCategory) {
+async function updateOwnedCatalogPanel(interaction, ownerId, selectedCategory, selectedProductId = "") {
   const identity = catalogPanelIdentity(interaction);
   return withCatalogPanelLock(catalogPanelLockKey(identity), async () => {
     const { categories } = await catalogData(getDatabase());
     const category = categories.includes(selectedCategory) ? selectedCategory : (categories[0] || "");
-    await interaction.editReply(await buildCatalogPayload(category, "", ownerId));
-    await persistCatalogPanelState(interaction, interaction.message.id, category, "");
+    await interaction.editReply(await buildCatalogPayload(category, selectedProductId, ownerId));
+    await persistCatalogPanelState(interaction, interaction.message.id, category, selectedProductId);
   });
+}
+
+async function refreshUserCatalogPanels(readyClient) {
+  const db = getDatabase();
+  const collection = db.collection("catalog_user_panels");
+  const records = await collection.find({}).toArray();
+  const { categories } = await catalogData(db);
+  const channelCache = new Map();
+
+  for (const record of records) {
+    const identity = {
+      guildId: record.guildId,
+      channelId: record.channelId,
+      userId: record.userId,
+    };
+    try {
+      let channel = channelCache.get(record.channelId);
+      if (!channel) {
+        channel = await fetchChannelOrNull(readyClient, record.channelId);
+        if (channel) channelCache.set(record.channelId, channel);
+      }
+      if (!channel?.messages) continue;
+
+      const message = await fetchMessageOrNull(channel, record.messageId);
+      if (!message || message.author?.id !== readyClient.user?.id) {
+        await collection.deleteOne(identity);
+        continue;
+      }
+
+      const selectedCategory = categories.includes(record.selectedCategory)
+        ? record.selectedCategory
+        : (categories[0] || "");
+      await message.edit(await buildCatalogPayload(selectedCategory, record.selectedProductId || "", record.userId));
+      if (selectedCategory !== record.selectedCategory) {
+        await collection.updateOne(identity, {
+          $set: {
+            selectedCategory,
+            selectedProductId: "",
+            updatedAt: new Date(),
+          },
+        });
+      }
+    } catch (error) {
+      logError("catalog-user-panel-refresh-" + record.userId, error);
+    }
+  }
 }
 
 function catalogPanelOwner(customId, isPageButton = false) {
@@ -943,6 +990,7 @@ async function handleCatalogSelection(interaction) {
         }));
         return;
       }
+      await updateOwnedCatalogPanel(interaction, ownerId, category, id);
     }
 
     const confirmPanel = buildPanel(
