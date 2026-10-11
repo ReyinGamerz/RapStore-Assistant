@@ -12,6 +12,7 @@ import { refreshGlobalCommands } from "./global-commands.js";
 import { buildMessage, buildComponentsOnly, buildPanel } from "./ui.js";
 import { isStaffMember, canAccessTicket, canManuallyCloseTicket } from "./security.js";
 import { reconcileMissingTicket } from "./ticket-recovery.js";
+import { wrapCategoryIndex } from "./catalog-state.js";
 import { allocateTicketNumber, initializeOrderTicket, handleOrderInteraction, handleOrderMessage, archiveAndDeleteTicket, startOrderMaintenance } from "./order-system.js";
 
 let client;
@@ -20,6 +21,7 @@ let stopOrderMaintenance;
 const EPHEMERAL = MessageFlags.Ephemeral;
 const productPickerCache = new Map();
 const categoryPickerCache = new Map();
+const catalogPanelLocks = new Map();
 
 function v2Payload(payload) {
   const flags = payload?.flags ?? 0;
@@ -635,7 +637,7 @@ async function catalogData(db) {
   return { categories: normalized, products };
 }
 
-async function buildCatalogPayload(selectedCategory = "", selectedProductId = "") {
+async function buildCatalogPayload(selectedCategory = "", selectedProductId = "", ownerId = "") {
   const db = getDatabase();
   const { categories, products } = await catalogData(db);
   const category = categories.includes(selectedCategory) ? selectedCategory : (categories[0] || "");
@@ -673,14 +675,18 @@ async function buildCatalogPayload(selectedCategory = "", selectedProductId = ""
 
   const panel = buildPanel("");
   panel.addTextDisplayComponents(new TextDisplayBuilder().setContent("### <:Catalog:1558470276981850132> RAPSTORE — CATALOG"));
+  if (ownerId) {
+    panel.addTextDisplayComponents(new TextDisplayBuilder().setContent("Panel publik khusus <@" + ownerId + ">. Hanya pemilik panel ini yang dapat mengubah kategori di sini."));
+  }
   panel.addSeparatorComponents(new SeparatorBuilder());
   panel.addTextDisplayComponents(new TextDisplayBuilder().setContent(lines.join("\n").slice(0, 3900)));
   panel.addSeparatorComponents(new SeparatorBuilder());
 
   const categoryRecords = await getProductCategories();
   const categoryEmojiMap = new Map(categoryRecords.map(item => [item.name, item.emoji]));
+  const ownerSuffix = ownerId ? ":" + ownerId : "";
   const categoryMenu = new StringSelectMenuBuilder()
-    .setCustomId("rapstore:catalog:category")
+    .setCustomId("rapstore:catalog:category" + ownerSuffix)
     .setPlaceholder(category ? ("Kategori: " + categoryDisplay({name:category,emoji:categoryEmojiMap.get(category)}).name).slice(0, 150) : "Pilih Kategori")
     .setMinValues(1).setMaxValues(1)
     .addOptions((categories.length ? categories : ["Belum ada kategori"]).slice(0, 25).map(c => {
@@ -692,7 +698,7 @@ async function buildCatalogPayload(selectedCategory = "", selectedProductId = ""
   if (!categories.length) categoryMenu.setDisabled(true);
 
   const productMenu = new StringSelectMenuBuilder()
-    .setCustomId("rapstore:catalog:product")
+    .setCustomId("rapstore:catalog:product" + ownerSuffix)
     .setPlaceholder(selectedProduct ? safeText(selectedProduct.name, 150) : "Pilih Produk")
     .setMinValues(1).setMaxValues(1);
   const productOptions = list.slice(0, 25).map(p => {
@@ -721,17 +727,17 @@ async function buildCatalogPayload(selectedCategory = "", selectedProductId = ""
   const pageLabel = categories.length ? (Math.max(0, categoryIndex) + 1) + "/" + categories.length : "0/0";
   panel.addActionRowComponents(new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId("rapstore:catalog:category-page:prev:" + Math.max(0, categoryIndex))
+      .setCustomId("rapstore:catalog:category-page:prev:" + Math.max(0, categoryIndex) + ownerSuffix)
       .setLabel("PREV")
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(categories.length <= 1),
     new ButtonBuilder()
-      .setCustomId("rapstore:catalog:category-page:counter:" + Math.max(0, categoryIndex))
+      .setCustomId("rapstore:catalog:category-page:counter:" + Math.max(0, categoryIndex) + ownerSuffix)
       .setLabel(pageLabel)
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(true),
     new ButtonBuilder()
-      .setCustomId("rapstore:catalog:category-page:next:" + Math.max(0, categoryIndex))
+      .setCustomId("rapstore:catalog:category-page:next:" + Math.max(0, categoryIndex) + ownerSuffix)
       .setLabel("NEXT")
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(categories.length <= 1),
@@ -741,6 +747,106 @@ async function buildCatalogPayload(selectedCategory = "", selectedProductId = ""
     components: [panel],
     allowedMentions: { parse: [], users: [], roles: [] },
   };
+}
+
+function catalogPanelIdentity(interaction) {
+  return {
+    guildId: interaction.guildId,
+    channelId: interaction.channelId,
+    userId: interaction.user.id,
+  };
+}
+
+function catalogPanelLockKey(identity) {
+  return identity.guildId + ":" + identity.channelId + ":" + identity.userId;
+}
+
+async function withCatalogPanelLock(key, work) {
+  const previous = catalogPanelLocks.get(key) || Promise.resolve();
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const queued = previous.catch(() => {}).then(() => gate);
+  catalogPanelLocks.set(key, queued);
+  await previous.catch(() => {});
+  try {
+    return await work();
+  } finally {
+    release();
+    if (catalogPanelLocks.get(key) === queued) catalogPanelLocks.delete(key);
+  }
+}
+
+async function persistCatalogPanelState(interaction, messageId, selectedCategory, selectedProductId = "") {
+  const identity = catalogPanelIdentity(interaction);
+  await getDatabase().collection("catalog_user_panels").updateOne(identity, {
+    $set: {
+      ...identity,
+      messageId: String(messageId),
+      selectedCategory: safeText(selectedCategory, 80),
+      selectedProductId: String(selectedProductId || ""),
+      updatedAt: new Date(),
+    },
+  }, { upsert: true });
+}
+
+async function ensureUserCatalogPanel(interaction, selectedCategory = "", selectedProductId = "") {
+  const identity = catalogPanelIdentity(interaction);
+  const lockKey = catalogPanelLockKey(identity);
+  return withCatalogPanelLock(lockKey, async () => {
+    const collection = getDatabase().collection("catalog_user_panels");
+    const record = await collection.findOne(identity);
+    let message = null;
+    const channel = interaction.channel;
+
+    if (record && channel?.messages) {
+      message = await fetchMessageOrNull(channel, record.messageId);
+      if (message && message.author?.id !== client?.user?.id) message = null;
+    }
+
+    const { categories } = await catalogData(getDatabase());
+    const category = categories.includes(selectedCategory) ? selectedCategory : (categories[0] || "");
+    const payload = await buildCatalogPayload(category, selectedProductId, interaction.user.id);
+
+    if (message) {
+      await message.edit(payload);
+    } else {
+      if (record) await collection.deleteOne(identity);
+      if (!channel || typeof channel.send !== "function") {
+        throw new Error("The catalog interaction channel cannot send public messages.");
+      }
+      message = await channel.send(payload);
+    }
+
+    await persistCatalogPanelState(interaction, message.id, category, selectedProductId);
+    return message;
+  });
+}
+
+async function updateOwnedCatalogPanel(interaction, ownerId, selectedCategory) {
+  const identity = catalogPanelIdentity(interaction);
+  return withCatalogPanelLock(catalogPanelLockKey(identity), async () => {
+    const { categories } = await catalogData(getDatabase());
+    const category = categories.includes(selectedCategory) ? selectedCategory : (categories[0] || "");
+    await interaction.editReply(await buildCatalogPayload(category, "", ownerId));
+    await persistCatalogPanelState(interaction, interaction.message.id, category, "");
+  });
+}
+
+function catalogPanelOwner(customId, isPageButton = false) {
+  const parts = String(customId || "").split(":");
+  return isPageButton ? (parts[5] || "") : (parts[3] || "");
+}
+
+async function catalogPanelErrorNotice(interaction, error) {
+  logError("catalog-user-panel", error);
+  try {
+    await interaction.followUp(v2Payload({
+      content: "Panel katalog publik per pengguna gagal diperbarui. Pastikan bot memiliki izin melihat channel, membaca riwayat pesan, dan mengirim pesan.",
+      flags: EPHEMERAL | MessageFlags.IsComponentsV2,
+    }));
+  } catch (followUpError) {
+    logError("catalog-user-panel-notice", followUpError);
+  }
 }
 
 async function handleCatalogSelection(interaction) {
@@ -753,48 +859,58 @@ async function handleCatalogSelection(interaction) {
   }
 
   const db = getDatabase();
-  // Public catalog interactions create a private copy so one member's choices
-  // cannot change the selections currently displayed to every other member.
-
-  if (interaction.customId === "rapstore:catalog:category") {
-    const category = safeText(interaction.values[0], 80);
-    // A public catalog selection must update the existing public message.
-    // deferReply() would create a new ephemeral response and leave the public
-    // catalog unchanged, which is not the intended shared-catalog behavior.
-    await interaction.deferUpdate();
-    await interaction.editReply(await buildCatalogPayload(category, ""));
+  const isCategory = interaction.customId.startsWith("rapstore:catalog:category");
+  const ownerId = catalogPanelOwner(interaction.customId);
+  if (ownerId && ownerId !== interaction.user.id) {
+    await interaction.reply(v2Payload({
+      content: "Panel katalog publik ini milik pengguna lain. Gunakan katalog utama untuk membuka panelmu sendiri.",
+      flags: EPHEMERAL | MessageFlags.IsComponentsV2,
+    }));
     return;
   }
 
-  if (interaction.customId === "rapstore:catalog:product") {
+  if (isCategory) {
+    const requestedCategory = safeText(interaction.values[0], 80);
+    const { categories } = await catalogData(db);
+    const category = categories.includes(requestedCategory) ? requestedCategory : (categories[0] || "");
+    await interaction.deferUpdate();
+
+    if (!ownerId) {
+      try {
+        await ensureUserCatalogPanel(interaction, category, "");
+      } catch (error) {
+        await catalogPanelErrorNotice(interaction, error);
+      }
+      return;
+    }
+
+    await updateOwnedCatalogPanel(interaction, ownerId, category);
+    return;
+  }
+
+  if (interaction.customId.startsWith("rapstore:catalog:product")) {
     const id = String(interaction.values[0] || "");
-    // Acknowledge the select on the original catalog message. Subsequent
-    // editReply() calls update that same message rather than creating a new
-    // ephemeral catalog copy.
     await interaction.deferUpdate();
     if (id === "none") {
-      const payload = v2Payload({
+      await interaction.followUp(v2Payload({
         content: "Pilih kategori terlebih dahulu, lalu pilih produk.",
         flags: EPHEMERAL | MessageFlags.IsComponentsV2,
-      });
-      await interaction.followUp(payload);
+      }));
       return;
     }
     if (!ObjectId.isValid(id)) {
-      const payload = v2Payload({
+      await interaction.followUp(v2Payload({
         content: "Produk tidak valid. Silakan pilih ulang.",
         flags: EPHEMERAL | MessageFlags.IsComponentsV2,
-      });
-      await interaction.followUp(payload);
+      }));
       return;
     }
     const product = await db.collection("products").findOne({ _id: new ObjectId(id), active: true });
     if (!product) {
-      const payload = v2Payload({
+      await interaction.followUp(v2Payload({
         content: "Produk tidak ditemukan atau sudah tidak aktif. Silakan pilih ulang.",
         flags: EPHEMERAL | MessageFlags.IsComponentsV2,
-      });
-      await interaction.followUp(payload);
+      }));
       return;
     }
     const category = safeText(product.category || "Umum", 80);
@@ -806,6 +922,29 @@ async function handleCatalogSelection(interaction) {
       }));
       return;
     }
+
+    if (!ownerId) {
+      try {
+        await ensureUserCatalogPanel(interaction, category, id);
+      } catch (error) {
+        await catalogPanelErrorNotice(interaction, error);
+        return;
+      }
+    } else {
+      const record = await db.collection("catalog_user_panels").findOne({
+        ...catalogPanelIdentity(interaction),
+        userId: ownerId,
+        messageId: interaction.message.id,
+      });
+      if (!record || (record.selectedCategory && record.selectedCategory !== category)) {
+        await interaction.followUp(v2Payload({
+          content: "Pilihan produk sudah tidak cocok dengan kategori panel ini. Pilih kategorinya lagi lalu pilih produk yang tampil.",
+          flags: EPHEMERAL | MessageFlags.IsComponentsV2,
+        }));
+        return;
+      }
+    }
+
     const confirmPanel = buildPanel(
       "KONFIRMASI PESANAN",
       "Lu memilih produk **" + safeText(product.name, 100) + "** dengan harga **" + formatPrice(product.price) + "**.\n\nLanjutkan untuk membuat tiket order, atau batalkan jika berubah pikiran.",
@@ -825,9 +964,7 @@ async function handleCatalogSelection(interaction) {
       components: [confirmPanel],
       allowedMentions: { parse: [], users: [], roles: [] },
     });
-    return;
   }
-
 }
 
 async function handleCatalogPageButton(interaction) {
@@ -841,6 +978,7 @@ async function handleCatalogPageButton(interaction) {
   const parts = String(interaction.customId || "").split(":");
   const action = parts[3] || "";
   const requestedIndex = Number(parts[4]);
+  const ownerId = catalogPanelOwner(interaction.customId, true);
   if (!["prev", "next"].includes(action)) {
     await interaction.reply(v2Payload({
       content: "Navigasi kategori tidak valid. Buka ulang katalog lalu coba lagi.",
@@ -848,20 +986,28 @@ async function handleCatalogPageButton(interaction) {
     }));
     return;
   }
-  // Acknowledge the component immediately so a slow database query cannot
-  // exceed Discord's interaction response deadline.
-  await interaction.deferUpdate();
-  const { categories } = await catalogData(getDatabase());
-  if (!categories.length) {
-    await interaction.editReply(await buildCatalogPayload());
+  if (ownerId && ownerId !== interaction.user.id) {
+    await interaction.reply(v2Payload({
+      content: "Panel katalog publik ini milik pengguna lain. Gunakan katalog utama untuk membuka panelmu sendiri.",
+      flags: EPHEMERAL | MessageFlags.IsComponentsV2,
+    }));
     return;
   }
-  const currentIndex = Number.isInteger(requestedIndex) && requestedIndex >= 0 && requestedIndex < categories.length
-    ? requestedIndex
-    : 0;
-  const delta = action === "prev" ? -1 : 1;
-  const nextIndex = (currentIndex + delta + categories.length) % categories.length;
-  await interaction.editReply(await buildCatalogPayload(categories[nextIndex], ""));
+
+  await interaction.deferUpdate();
+  const { categories } = await catalogData(getDatabase());
+  const nextIndex = wrapCategoryIndex(requestedIndex, action, categories.length);
+  const category = nextIndex >= 0 ? categories[nextIndex] : "";
+
+  if (!ownerId) {
+    try {
+      await ensureUserCatalogPanel(interaction, category, "");
+    } catch (error) {
+      await catalogPanelErrorNotice(interaction, error);
+    }
+    return;
+  }
+  await updateOwnedCatalogPanel(interaction, ownerId, category);
 }
 
 async function createCatalogOrderTicket(interaction, selectedProductId) {
