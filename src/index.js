@@ -580,7 +580,9 @@ async function showCategoryManagePicker(interaction, mode) {
   const options = categories.slice(0,25).map(category => {
     const display = categoryDisplay(category);
     const option = { label: display.name.slice(0,100), value: encodeCategory(category.name), description: "Kategori: " + display.name };
-    if (display.emoji) option.emoji = display.emoji;
+    const emoji = display.emoji;
+    const guild = client?.guilds?.cache?.get(config.guildId);
+    if (emoji && (!emoji.id || guild?.emojis?.cache?.has(emoji.id))) option.emoji = emoji;
     return option;
   });
   if (!options.length) {
