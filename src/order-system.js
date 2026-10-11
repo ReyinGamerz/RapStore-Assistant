@@ -640,6 +640,14 @@ function buildPaymentInstruction(order, method, payment, statusNote = "") {
   return v2(container);
 }
 
+function formatLogProductName(value) {
+  const name = clean(value || "Belum dipilih", 100);
+  if (/server\\s*boost/i.test(name)) {
+    return name.replace(/\\b(\\d+x)\\b/g, "`$1`").replace(/\\b(\\d+)\\s+Month\\b/gi, "`$1` Month");
+  }
+  return escapeDiscordMarkdown(name);
+}
+
 function buildOrderLog(order) {
   const container = new ContainerBuilder();
   const date = new Date(order.completedAt || order.createdAt || Date.now()).toLocaleDateString("en-GB", { timeZone: "Asia/Jakarta", day: "2-digit", month: "2-digit", year: "numeric" });
@@ -650,7 +658,7 @@ function buildOrderLog(order) {
   divider(container);
   container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
     "<:rap38:1558867687537381547> Name: <@" + clean(order.buyerId, 30) + ">\n" +
-    "<:rap10:1558865612908924938> Product: " + clean(order.productName || "Belum dipilih", 100) + " " + tick + amount + tick + "\n" +
+    "<:rap10:1558865612908924938> Product: " + formatLogProductName(order.productName || "Belum dipilih") + "\n" +
     "<:rap23:1558866296043601920> Amount: " + tick + amount + tick + "\n" +
     "<:rap39:1558867720290828288> Price: " + tick + "Rp" + total + tick + "\n" +
     "<:rap7:1558866234374619178> Status: " + tick + clean(order.status || "ON HOLD", 30) + tick + "\n" +
@@ -1282,7 +1290,7 @@ async function publishPendingVouches(client) {
       divider(panel);
       panel.addTextDisplayComponents(new TextDisplayBuilder().setContent(
         "<:rap38:1558867687537381547> Name: <@" + vouch.buyerId + ">\n" +
-        "<:rap10:1558865612908924938> Product: " + escapeDiscordMarkdown(clean(vouch.productName || "Produk RapStore", 100)) + "\n" +
+        "<:rap10:1558865612908924938> Product: " + formatLogProductName(vouch.productName || "Produk RapStore") + "\n" +
         "<:rap49:1558868051150245969> Rating: " + stars + " (" + rating + "/5)\n" +
         "<:rap25:1558867090817941574> Pesan & Kesan\n" +
         "```" + message.replace(/```/g, "` ​``").slice(0, 900) + "```\n" +
