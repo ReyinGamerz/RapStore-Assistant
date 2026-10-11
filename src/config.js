@@ -20,6 +20,7 @@ export const config = {
     founderRole: optionalId("FOUNDER_ROLE_ID", "1549754249485877288"),
     adminRole: optionalId("ADMIN_ROLE_ID", "1549942317249593425"),
     supportCategory: optionalId("SUPPORT_CATEGORY_ID", "1552879597601820732"),
+    orderCategory: optionalId("ORDER_CATEGORY_ID"),
   },
   channels: {
     catalog: optionalId("CATALOG_CHANNEL", "1551251028522045470"),
