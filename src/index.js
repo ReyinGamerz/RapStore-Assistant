@@ -1398,6 +1398,59 @@ async function handleSetupServerCommand(interaction) {
   }
 }
 
+async function handleBulkProductImport(interaction) {
+  if (!interaction.inGuild() || !hasFounderRole(interaction.member)) {
+    await interaction.reply(v2Payload({ content: "Import produk massal hanya untuk Founder di server toko.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
+    return;
+  }
+  const attachment = interaction.options.getAttachment("file", true);
+  if (!/\.csv$/i.test(String(attachment.name || ""))) {
+    await interaction.reply(v2Payload({ content: "Lampirkan file .csv. Kolom wajib: name,price,category. Kolom opsional: emoji,description.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
+    return;
+  }
+  if (Number(attachment.size || 0) > 2 * 1024 * 1024) {
+    await interaction.reply(v2Payload({ content: "File CSV maksimal 2 MiB.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
+    return;
+  }
+  await interaction.deferReply({ flags: EPHEMERAL | MessageFlags.IsComponentsV2 });
+  try {
+    const response = await fetch(attachment.url);
+    if (!response.ok) throw new Error("Gagal mengunduh CSV dari Discord.");
+    const raw = Buffer.from(await response.arrayBuffer());
+    if (raw.length > 2 * 1024 * 1024) throw new Error("File CSV maksimal 2 MiB.");
+    const { parseProductCsv } = await import("./product-import.js");
+    const parsed = parseProductCsv(raw.toString("utf8"));
+    const db = getDatabase();
+    const categoryMap = new Map((await getProductCategories()).map(item => [item.name.toLocaleLowerCase("id-ID"), item.name]));
+    const unknown = [...new Set(parsed.map(item => item.category).filter(name => !categoryMap.has(name.toLocaleLowerCase("id-ID"))))];
+    if (unknown.length) throw new Error("Kategori belum ada di database: " + unknown.join(", ") + ". Buat kategori lewat /panel terlebih dahulu. Tidak ada produk yang diimport.");
+    for (const item of parsed) item.category = categoryMap.get(item.category.toLocaleLowerCase("id-ID"));
+    const existing = await db.collection("products").find({}, { projection: { name: 1, category: 1 } }).toArray();
+    const keys = new Set(existing.map(item => String(item.name || "").toLocaleLowerCase("id-ID") + "\u0000" + String(item.category || "").toLocaleLowerCase("id-ID")));
+    const unique = [];
+    let duplicates = 0;
+    for (const item of parsed) {
+      const key = item.name.toLocaleLowerCase("id-ID") + "\u0000" + item.category.toLocaleLowerCase("id-ID");
+      if (keys.has(key)) { duplicates++; continue; }
+      keys.add(key);
+      unique.push(item);
+    }
+    if (!unique.length) {
+      await interaction.editReply(v2Payload({ content: "Tidak ada produk baru untuk ditambahkan. Semua " + parsed.length + " baris sudah ada (duplikat dilewati).", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
+      return;
+    }
+    const now = new Date();
+    const documents = unique.map(item => ({ ...item, active: true, currency: "IDR", createdAt: now, updatedAt: now, createdBy: interaction.user.id }));
+    const result = await db.collection("products").insertMany(documents, { ordered: true });
+    await refreshPersistentPanels(client, "catalog");
+    await audit("products.bulk_imported", interaction, { inserted: result.insertedCount, duplicates, filename: safeText(attachment.name, 120) });
+    await interaction.editReply(v2Payload({ content: "Import produk selesai.\nBerhasil ditambahkan: **" + result.insertedCount + "**\nDuplikat dilewati: **" + duplicates + "**\nTotal baris valid: **" + parsed.length + "**\nKatalog publik sudah disegarkan.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
+  } catch (error) {
+    logError("bulk-product-import", error);
+    await interaction.editReply(v2Payload({ content: "Import dibatalkan: " + String(error?.message || "kesalahan tidak diketahui").slice(0, 1700) + "\nTidak ada produk yang ditambahkan jika validasi gagal.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
+  }
+}
+
 async function handleInteraction(interaction) {
   if (interaction.isChatInputCommand() && interaction.commandName === "setupserver") {
     await handleSetupServerCommand(interaction); return;
@@ -1442,6 +1495,7 @@ async function handleInteraction(interaction) {
   }
   if (!interaction.isChatInputCommand()) return;
   if (interaction.commandName === "panel") { await showFounderPanel(interaction); return; }
+  if (interaction.commandName === "importproduk") { await handleBulkProductImport(interaction); return; }
   if (interaction.commandName === "addemoji") { await handleAddEmojiCommand(interaction); return; }
   if (interaction.commandName === "removeemoji") { await handleRemoveEmojiCommand(interaction); return; }
   if (interaction.commandName === "catalog") {
