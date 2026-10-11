@@ -350,11 +350,18 @@ async function handleAddEmojiCommand(interaction) {
     const existingNames = new Set(interaction.guild.emojis.cache.map(emoji => emoji.name));
     const added = [];
     const failed = [];
+    const uploadDelayMs = 1500;
+    let uploadAttempts = 0;
     for (const file of files) {
       if (existingNames.has(file.name)) {
         skipped.push(file.filename + ": nama emoji " + file.name + " sudah digunakan");
         continue;
       }
+      // Space out uploads to reduce the chance of hitting Discord's emoji-create rate limit.
+      if (uploadAttempts > 0) {
+        await new Promise(resolve => setTimeout(resolve, uploadDelayMs));
+      }
+      uploadAttempts++;
       try {
         await interaction.guild.emojis.create({
           attachment: file.data,
