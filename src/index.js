@@ -389,6 +389,17 @@ async function handleAddEmojiCommand(interaction) {
         const code = error?.code ? " (kode " + error.code + ")" : "";
         failed.push(file.filename + " [" + file.name + "]: " + String(error?.message || "gagal ditambahkan").slice(0, 160) + code);
       }
+      // Keep the deferred interaction visibly alive and show progress during large ZIP imports.
+      const processed = added.length + failed.length;
+      if (processed > 0 && processed % 5 === 0) {
+        await interaction.editReply({
+          flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral,
+          components: [buildPanel(
+            "IMPORT EMOJI BERLANGSUNG",
+            "File terbaca: **" + files.length + "**\nSudah diproses: **" + processed + "/" + files.length + "**\nBerhasil: **" + added.length + "** | Gagal: **" + failed.length + "** | Dilewati: **" + skipped.length + "**\nMohon tunggu, upload masih berjalan."
+          )],
+        });
+      }
     }
 
     const summarize = (label, items) => {
