@@ -1144,7 +1144,7 @@ async function createCatalogOrderTicket(interaction, selectedProductId) {
       const ticketNumber = await allocateTicketNumber("order");
       const ticketCode = await allocateTicketCode();
       const channel = await interaction.guild.channels.create({
-        name: ticketNumber.channelName, type: ChannelType.GuildText, parent: config.ids.supportCategory || undefined,
+        name: ticketNumber.channelName, type: ChannelType.GuildText, parent: config.ids.orderCategory || undefined,
         topic: "RapStore " + ticketType + "; ticket " + ticketCode + "; buyer " + interaction.user.id,
         permissionOverwrites: [
           { id: interaction.guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
