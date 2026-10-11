@@ -350,11 +350,18 @@ async function handleAddEmojiCommand(interaction) {
     const existingNames = new Set(interaction.guild.emojis.cache.map(emoji => emoji.name));
     const added = [];
     const failed = [];
+    const uploadDelayMs = 1500;
+    let uploadAttempts = 0;
     for (const file of files) {
       if (existingNames.has(file.name)) {
         skipped.push(file.filename + ": nama emoji " + file.name + " sudah digunakan");
         continue;
       }
+      // Space out uploads to reduce the chance of hitting Discord's emoji-create rate limit.
+      if (uploadAttempts > 0) {
+        await new Promise(resolve => setTimeout(resolve, uploadDelayMs));
+      }
+      uploadAttempts++;
       try {
         await interaction.guild.emojis.create({
           attachment: file.data,
@@ -382,6 +389,88 @@ async function handleAddEmojiCommand(interaction) {
       flags: EPHEMERAL | MessageFlags.IsComponentsV2,
     }));
   }
+}
+
+async function handleRemoveEmojiCommand(interaction) {
+  if (!interaction.inGuild()) {
+    await interaction.reply(v2Payload({ content: "Command ini hanya bisa digunakan di server Discord.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
+    return;
+  }
+  if (!hasFounderRole(interaction.member)) {
+    await interaction.reply(v2Payload({ content: "Command /removeemoji hanya untuk Founder.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
+    return;
+  }
+  const mode = interaction.options.getString("mode", true);
+  const emojis = [...interaction.guild.emojis.cache.values()];
+  if (!emojis.length) {
+    await interaction.reply(v2Payload({ content: "Server ini belum memiliki emoji yang bisa dihapus.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
+    return;
+  }
+  if (mode === "pilih") {
+    const menu = new StringSelectMenuBuilder().setCustomId("rapstore:emoji:remove:select")
+      .setPlaceholder("Pilih emoji yang ingin dihapus").setMinValues(1).setMaxValues(1)
+      .addOptions(emojis.slice(0, 25).map(emoji => ({
+        label: (emoji.name || "emoji").slice(0, 100), value: emoji.id,
+        description: emoji.animated ? "GIF animasi" : "Emoji statis", emoji: { id: emoji.id },
+      })));
+    const panel = buildPanel("HAPUS EMOJI", "Pilih satu emoji. Penghapusan tidak bisa dibatalkan." +
+      (emojis.length > 25 ? "\\nCatatan: menu Discord hanya menampilkan 25 emoji pertama dari total " + emojis.length + "." : ""));
+    panel.addActionRowComponents(new ActionRowBuilder().addComponents(menu));
+    await interaction.reply({ flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral, components: [panel] });
+    return;
+  }
+  if (mode === "semua") {
+    const panel = buildPanel("KONFIRMASI HAPUS SEMUA EMOJI",
+      "⚠️ Kamu akan menghapus **" + emojis.length + " emoji** dari server ini. Tindakan ini tidak bisa dibatalkan.");
+    panel.addActionRowComponents(new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId("rapstore:emoji:remove:all:confirm").setLabel("Ya, hapus semua").setStyle(ButtonStyle.Danger),
+      new ButtonBuilder().setCustomId("rapstore:emoji:remove:all:cancel").setLabel("Batalkan").setStyle(ButtonStyle.Secondary),
+    ));
+    await interaction.reply({ flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral, components: [panel] });
+  }
+}
+
+async function handleRemoveEmojiComponent(interaction) {
+  if (!interaction.inGuild() || !hasFounderRole(interaction.member)) {
+    await interaction.reply(v2Payload({ content: "Fitur ini hanya untuk Founder.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
+    return;
+  }
+  if (interaction.isStringSelectMenu() && interaction.customId === "rapstore:emoji:remove:select") {
+    await interaction.deferReply({ flags: EPHEMERAL | MessageFlags.IsComponentsV2 });
+    const emoji = await interaction.guild.emojis.fetch(interaction.values[0]).catch(() => null);
+    if (!emoji) {
+      await interaction.editReply(v2Payload({ content: "Emoji tidak ditemukan atau sudah dihapus.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
+      return;
+    }
+    try {
+      await emoji.delete("Emoji removal requested by Founder " + interaction.user.id);
+      await interaction.editReply(v2Payload({ content: "Emoji **:" + safeText(emoji.name || "emoji", 80) + ":** berhasil dihapus.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
+    } catch (error) {
+      logError("founder-remove-emoji-single", error);
+      await interaction.editReply(v2Payload({ content: "Gagal menghapus emoji. Emoji terkelola mungkin tidak dapat dihapus, atau bot tidak memiliki izin Manage Expressions.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
+    }
+    return;
+  }
+  if (!interaction.isButton() || !interaction.customId.startsWith("rapstore:emoji:remove:all:")) return;
+  if (interaction.customId.endsWith(":cancel")) {
+    await interaction.update({ flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral, components: [buildPanel("DIBATALKAN", "Tidak ada emoji yang dihapus.")] });
+    return;
+  }
+  await interaction.deferUpdate();
+  const emojis = [...interaction.guild.emojis.cache.values()];
+  let deleted = 0;
+  const failed = [];
+  for (const emoji of emojis) {
+    try {
+      await emoji.delete("Bulk emoji removal requested by Founder " + interaction.user.id);
+      deleted++;
+    } catch (error) {
+      failed.push((emoji.name || emoji.id) + ": " + String(error?.message || "gagal").slice(0, 100));
+    }
+  }
+  const lines = ["Berhasil dihapus: **" + deleted + "**"];
+  if (failed.length) lines.push("Gagal: **" + failed.length + "**", failed.slice(0, 12).join("; ").slice(0, 1500));
+  await interaction.editReply({ flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral, components: [buildPanel("HASIL HAPUS EMOJI", lines.join("\\n"))] });
 }
 
 async function refreshPersistentPanels(readyClient, onlyType = null) {
@@ -1141,6 +1230,10 @@ async function handleInteraction(interaction) {
       (interaction.customId.startsWith("rapstore:order:") || interaction.customId.startsWith("rapstore:payment:") || interaction.customId.startsWith("rapstore:vouch:"))) {
     await handleOrderInteraction(interaction, client); return;
   }
+  if ((interaction.isButton() && interaction.customId.startsWith("rapstore:emoji:remove:")) ||
+      (interaction.isStringSelectMenu() && interaction.customId === "rapstore:emoji:remove:select")) {
+    await handleRemoveEmojiComponent(interaction); return;
+  }
   if (interaction.isButton() && interaction.customId.startsWith("rapstore:catalog:category-page:")) {
     await handleCatalogPageButton(interaction); return;
   }
@@ -1165,6 +1258,7 @@ async function handleInteraction(interaction) {
   if (!interaction.isChatInputCommand()) return;
   if (interaction.commandName === "panel") { await showFounderPanel(interaction); return; }
   if (interaction.commandName === "addemoji") { await handleAddEmojiCommand(interaction); return; }
+  if (interaction.commandName === "removeemoji") { await handleRemoveEmojiCommand(interaction); return; }
   if (interaction.commandName === "catalog") {
     if (!interaction.inGuild()) { await interaction.reply(v2Payload({ content: "Katalog publik hanya bisa dibuat di channel server.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 })); return; }
     if (!hasStaffRole(interaction.member)) { await interaction.reply(v2Payload({ content: "Command /catalog hanya untuk Founder/Admin. Member cukup menggunakan pesan katalog publik yang sudah tersedia.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 })); return; }

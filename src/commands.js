@@ -7,4 +7,12 @@ export const commandDefinitions = [
     .setName("addemoji")
     .setDescription("Founder: tambahkan emoji dari gambar atau ZIP ke server.")
     .addAttachmentOption(option => option.setName("file").setDescription("File PNG, GIF, JPG, atau ZIP berisi emoji").setRequired(true)),
+  new SlashCommandBuilder()
+    .setName("removeemoji")
+    .setDescription("Founder: hapus emoji tertentu atau semua emoji server.")
+    .addStringOption(option => option.setName("mode").setDescription("Pilih hapus satu emoji atau semua emoji").setRequired(true)
+      .addChoices(
+        { name: "Pilih emoji", value: "pilih" },
+        { name: "Hapus semua emoji", value: "semua" },
+      )),
 ];
