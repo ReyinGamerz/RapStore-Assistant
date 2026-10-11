@@ -15,6 +15,7 @@ import { reconcileMissingTicket } from "./ticket-recovery.js";
 import { wrapCategoryIndex } from "./catalog-state.js";
 import { extractSingleEmojiFile, extractEmojiFilesFromZip } from "./emoji-import.js";
 import { setupServer } from "./setup-server.js";
+import { setupTrapChannel, handleTrapMessage } from "./trap-chat.js";
 import { allocateTicketNumber, initializeOrderTicket, handleOrderInteraction, handleOrderMessage, archiveAndDeleteTicket, startOrderMaintenance } from "./order-system.js";
 
 let client;
@@ -1288,6 +1289,28 @@ async function handleCatalogOrderButton(interaction) {
   await createCatalogOrderTicket(interaction, productId);
 }
 
+async function handleSetupTrapCommand(interaction) {
+  if (!interaction.inGuild()) {
+    await interaction.reply({ content: "Perintah ini hanya bisa digunakan di server Discord.", flags: MessageFlags.Ephemeral });
+    return;
+  }
+  const member = interaction.member;
+  const allowed = member?.permissions?.has(PermissionFlagsBits.Administrator) ||
+    member?.permissions?.has(PermissionFlagsBits.ManageGuild) || hasFounderRole(member);
+  if (!allowed) {
+    await interaction.reply({ content: "Hanya Founder/Admin server yang bisa menjalankan /setuptrap.", flags: MessageFlags.Ephemeral });
+    return;
+  }
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  try {
+    const result = await setupTrapChannel(interaction.guild);
+    await interaction.editReply({ content: (result.created ? "Channel trap berhasil dibuat: " : "Channel trap sudah ada: ") + "<#" + result.channel.id + ">\nTimeout otomatis: 1 hari untuk pelanggaran pertama, 7 hari jika mengulangi. Tidak ada ban otomatis." });
+  } catch (error) {
+    logError("setuptrap", error);
+    await interaction.editReply({ content: "Gagal menyiapkan trap chat: " + String(error?.message || "error tidak diketahui").slice(0, 1200) });
+  }
+}
+
 async function handleSetupServerCommand(interaction) {
   if (!interaction.inGuild()) {
     await interaction.reply({ content: "Perintah ini hanya bisa digunakan di server Discord.", flags: MessageFlags.Ephemeral });
@@ -1324,6 +1347,9 @@ async function handleSetupServerCommand(interaction) {
 async function handleInteraction(interaction) {
   if (interaction.isChatInputCommand() && interaction.commandName === "setupserver") {
     await handleSetupServerCommand(interaction); return;
+  }
+  if (interaction.isChatInputCommand() && interaction.commandName === "setuptrap") {
+    await handleSetupTrapCommand(interaction); return;
   }
   if (interaction.inGuild() && interaction.guildId !== config.guildId) {
     if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
@@ -1459,6 +1485,7 @@ async function main() {
   });
   client.on(Events.MessageCreate, message => {
     if (message.guildId !== config.guildId) return;
+    void handleTrapMessage(message).catch(error => logError("trap-chat", error));
     void handleOrderMessage(message, client).catch(error => logError("order-message", error));
   });
   client.once(Events.ClientReady, readyClient => {
