@@ -106,7 +106,7 @@ test("order ticket creation no longer sends the extra INFO PESANAN message", () 
 });
 
 test("catalog uses the requested custom alur and Catalog emojis", () => {
-  assert.ok(source.includes("<:alur:1558458209977499740> **Harga:**"));
+  assert.ok(source.includes("<:rap17:1558866019227799585> **Harga:**"));
   assert.match(source, /### <:Catalog:1558470276981850132> RAPSTORE — CATALOG/);
   assert.doesNotMatch(source, /<:alur:1553800809198649344>/);
 });
