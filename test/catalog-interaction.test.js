@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 const source = readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
 const orderSource = readFileSync(new URL("../src/order-system.js", import.meta.url), "utf8");
 const catalogStateSource = readFileSync(new URL("../src/catalog-state.js", import.meta.url), "utf8");
+const configSource = readFileSync(new URL("../src/config.js", import.meta.url), "utf8");
 const catalogStart = source.indexOf("async function handleCatalogSelection(interaction)");
 const catalogEnd = source.indexOf("\nfunction formatPrice(", catalogStart);
 assert.notEqual(catalogStart, -1, "catalog selection handler should exist");
@@ -92,8 +93,8 @@ test("order and support ticket counters use independent names", () => {
 test("catalog and management panel are public and use configured channel IDs", () => {
   assert.match(source, /async function showFounderPanel\(interaction\)[\s\S]*?await upsertPersistentPanel\(interaction, "panel", buildFounderPanelPayload\(\)\)/);
   assert.match(source, /configuredPanelChannelId\(type\)/);
-  assert.match(source, /catalog: optionalId\("CATALOG_CHANNEL", "1551251028522045470"\)/);
-  assert.match(source, /adminPanel: optionalId\("CATALOG_ADMIN_PANEL", "1558775847421354075"\)/);
+  assert.match(configSource, /catalog: optionalId\("CATALOG_CHANNEL", "1551251028522045470"\)/);
+  assert.match(configSource, /adminPanel: optionalId\("CATALOG_ADMIN_PANEL", "1558775847421354075"\)/);
   assert.match(source, /if \(interaction\.commandName === "catalog"\)[\s\S]*?if \(!hasStaffRole\(interaction\.member\)\)/);
   assert.match(source, /await upsertPersistentPanel\(interaction, "catalog", await buildCatalogPayload\(savedCatalog\?\.selectedCategory/);
   assert.match(source, /async function handleAddEmojiCommand\(interaction\)[\s\S]*?if \(!hasFounderRole\(interaction\.member\)\)/);
