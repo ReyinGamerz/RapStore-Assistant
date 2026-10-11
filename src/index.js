@@ -407,15 +407,33 @@ async function handleRemoveEmojiCommand(interaction) {
     return;
   }
   if (mode === "pilih") {
-    const menu = new StringSelectMenuBuilder().setCustomId("rapstore:emoji:remove:select")
-      .setPlaceholder("Pilih emoji yang ingin dihapus").setMinValues(1).setMaxValues(1)
-      .addOptions(emojis.slice(0, 25).map(emoji => ({
-        label: (emoji.name || "emoji").slice(0, 100), value: emoji.id,
-        description: emoji.animated ? "GIF animasi" : "Emoji statis", emoji: { id: emoji.id },
-      })));
-    const panel = buildPanel("HAPUS EMOJI", "Pilih satu emoji. Penghapusan tidak bisa dibatalkan." +
-      (emojis.length > 25 ? "\\nCatatan: menu Discord hanya menampilkan 25 emoji pertama dari total " + emojis.length + "." : ""));
-    panel.addActionRowComponents(new ActionRowBuilder().addComponents(menu));
+    // Discord select menus allow at most 25 options each and five action rows per message.
+    const chunks = [];
+    for (let offset = 0; offset < emojis.length; offset += 25) {
+      chunks.push(emojis.slice(offset, offset + 25));
+    }
+    if (chunks.length > 5) {
+      await interaction.reply(v2Payload({
+        content: "Server memiliki terlalu banyak emoji untuk ditampilkan sekaligus. Maksimal 125 pilihan per panel; gunakan kembali /removeemoji setelah menghapus sebagian emoji.",
+        flags: EPHEMERAL | MessageFlags.IsComponentsV2,
+      }));
+      return;
+    }
+    const panel = buildPanel("HAPUS EMOJI", "Pilih satu emoji dari dropdown. Setiap dropdown menampilkan maksimal 25 emoji; dropdown tambahan dibuat otomatis untuk sisanya. Penghapusan tidak bisa dibatalkan.");
+    for (let index = 0; index < chunks.length; index++) {
+      const menu = new StringSelectMenuBuilder()
+        .setCustomId("rapstore:emoji:remove:select:" + index)
+        .setPlaceholder("Pilih emoji " + (index * 25 + 1) + "–" + (index * 25 + chunks[index].length))
+        .setMinValues(1)
+        .setMaxValues(1)
+        .addOptions(chunks[index].map(emoji => ({
+          label: (emoji.name || "emoji").slice(0, 100),
+          value: emoji.id,
+          description: emoji.animated ? "GIF animasi" : "Emoji statis",
+          emoji: { id: emoji.id },
+        })));
+      panel.addActionRowComponents(new ActionRowBuilder().addComponents(menu));
+    }
     await interaction.reply({ flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral, components: [panel] });
     return;
   }
@@ -435,7 +453,7 @@ async function handleRemoveEmojiComponent(interaction) {
     await interaction.reply(v2Payload({ content: "Fitur ini hanya untuk Founder.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
     return;
   }
-  if (interaction.isStringSelectMenu() && interaction.customId === "rapstore:emoji:remove:select") {
+  if (interaction.isStringSelectMenu() && interaction.customId.startsWith("rapstore:emoji:remove:select:")) {
     await interaction.deferReply({ flags: EPHEMERAL | MessageFlags.IsComponentsV2 });
     const emoji = await interaction.guild.emojis.fetch(interaction.values[0]).catch(() => null);
     if (!emoji) {
@@ -456,7 +474,11 @@ async function handleRemoveEmojiComponent(interaction) {
     await interaction.update({ flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral, components: [buildPanel("DIBATALKAN", "Tidak ada emoji yang dihapus.")] });
     return;
   }
-  await interaction.deferUpdate();
+  // Replace the confirmation controls immediately so the destructive action cannot be clicked repeatedly.
+  await interaction.update({
+    flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral,
+    components: [buildPanel("SEDANG MENGHAPUS EMOJI", "⏳ Penghapusan sedang berjalan. Tombol konfirmasi sudah dinonaktifkan; mohon tunggu sampai hasilnya muncul.")],
+  });
   const emojis = [...interaction.guild.emojis.cache.values()];
   let deleted = 0;
   const failed = [];
