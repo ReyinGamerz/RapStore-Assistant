@@ -21,11 +21,12 @@ npm start
 For a new install, run `npm install`, copy `.env.example` to `.env`, then set `DISCORD_TOKEN`, `DISCORD_CLIENT_ID`, and `MONGODB_URI`. Slash commands are registered globally; `DISCORD_GUILD_ID` is not used. Never commit or share `.env`. If the bot is managed by PM2, restart the existing process rather than starting a duplicate instance.
 
 ## Active commands
-- `/catalog` — Founder/Admin-only command to create or sync the public catalog message. Members use the public catalog message itself.
-- `/panel` — Founder/Admin-only, private (ephemeral) management panel. It never posts a new public management panel.
+- `/catalog` — Founder/Admin-only command to sync the shared public catalog in `CATALOG_CHANNEL`.
+- `/panel` — Founder/Admin-only command to sync the public catalog-management panel in `CATALOG_ADMIN_PANEL`. The panel itself is public; its command acknowledgment is private.
+- `/addemoji file:<attachment>` — Founder-role-only command to add one `.png`, `.gif`, `.jpg`, or `.jpeg` image, or multiple images from a `.zip` archive. Emoji names are derived from filenames (for example, `rap0.png` becomes `rap0`). Each image must be at most 256 KiB; ZIP uploads support up to 100 entries, with up to 50 valid images processed per command.
 - Slash commands are registered globally only; startup calls the global application-command endpoint and does not register or clean commands per guild. If migrating from an older version that left duplicate guild-scoped commands, run `npm run commands:refresh` once: this explicitly refreshes global commands and clears legacy guild copies from the servers the bot can enumerate. Runtime role checks remain authoritative.
 - `npm start` directly runs `node src/index.js`; it does not run tests first. For a manual pre-deploy check, run `npm test` and `npm run check`. Run `npm run commands:refresh` to refresh commands without starting the full bot.
-- The bot refreshes the saved public catalog on startup and removes any legacy public management-panel message recorded by older versions. Catalog data is refreshed after product/category changes made through the private `/panel`.
+- The bot creates or refreshes the shared public catalog and public management panel in their configured channels on startup. Old per-user catalog panels are cleaned up. Catalog data is refreshed after product/category changes made through the public `/panel`.
 - Ticket creation shows a temporary “TIKET SEDANG DIBUAT” status before reporting success or failure.
 - **Edit product:** selecting a product opens its edit form directly. Change the category by entering the exact name of an existing category; new or misspelled category names are rejected.
 - **Delete product:** available from the panel and requires confirmation.
@@ -38,7 +39,7 @@ For a new install, run `npm install`, copy `.env.example` to `.env`, then set `D
 - Product names and prices are rendered in bold; Server Boost multipliers and month count are formatted with separate backticks. The custom `alur` emoji (`<:alur:1558458209977499740>`) appears with one space before **Harga:**. The catalog heading uses `<:Catalog:1558470276981850132>`. 
 - Descriptions and reseller pricing are not shown.
 - Products come from the MongoDB `products` collection and only active products are displayed. Add or edit intended products in `/panel` with their correct category and price.
-- The category and product menus remain below the list. The shared base catalog stays unchanged: when a member chooses a category or presses `PREV/NEXT`, the bot creates or updates that member's **own public, non-ephemeral catalog panel** in the same channel. The panel reference is saved in MongoDB, so a later click or bot restart can reuse it. Only the panel owner can change its category; other members may see the panel but their clicks cannot change it. `PREV/NEXT` wrap around (`2/2` + `NEXT` → `1/2`; `1/2` + `PREV` → `2/2`) and are disabled when there is only one category. The ticket-destination menu is removed. Selecting an active product opens a separate ephemeral order confirmation with `Ya, Lanjutkan` and `Batalkan`. Only `Ya, Lanjutkan` creates an order ticket; `Batalkan` deletes the private confirmation without creating a ticket. The support-ticket opening flow is intentionally not exposed in the catalog yet.
+- The category and product menus remain below the list. The catalog uses one shared public panel. When any member chooses a category or presses `PREV/NEXT`, that same panel updates for everyone. `PREV/NEXT` wrap around (`2/2` + `NEXT` → `1/2`; `1/2` + `PREV` → `2/2`) and are disabled when there is only one category. The ticket-destination menu is removed. Selecting an active product opens a separate ephemeral order confirmation with `Ya, Lanjutkan` and `Batalkan`. Only `Ya, Lanjutkan` creates an order ticket; `Batalkan` deletes the private confirmation without creating a ticket. The support-ticket opening flow is intentionally not exposed in the catalog yet.
 
 ## Tickets
 - Order channels use persistent sequential names such as `rap-1`, `rap-2`; support tickets have a separate reserved counter and naming scheme such as `support-0`, `support-1`. The support-ticket opening flow will be added separately and is not available from the catalog yet.
@@ -58,6 +59,11 @@ For a new install, run `npm install`, copy `.env.example` to `.env`, then set `D
 - Marking an order `DONE` adds a `VOUCH` button. The buyer can submit a 1–5 rating and a message; the bot publishes one Components V2 customer-testimonial panel to `VOUCH_CHANNEL_ID`. If no vouch is submitted within one hour, a 5/5 automatic vouch with the text `vouch otomatis setelah 1 jam.` is published.
 - After a buyer vouch is successfully published, the bot immediately creates the HTML transcript and closes/deletes that order ticket. If no vouch is submitted, the same archive-and-close flow runs after the one-hour automatic vouch. The scheduled job retries after restarts and temporary configuration/permission failures; a ticket is not deleted if the transcript cannot be uploaded.
 - Order tickets create/update a Components V2 order log in `ORDER_LOG_CHANNEL_ID` with status, buyer, product, quantity, total price, date, and order ID. Consultation (`tanya-*`) tickets do not create order logs.
+
+## Public panel configuration
+- `CATALOG_CHANNEL` — channel ID for the shared public catalog (defaults to `1551251028522045470`).
+- `CATALOG_ADMIN_PANEL` — channel ID for the shared public catalog-management panel (defaults to `1558775847421354075`).
+- The bot needs View Channel, Send Messages, and Manage Messages permissions in both channels so it can create and refresh the persistent panels.
 
 ## Manual payment configuration
 Set these values in the local `.env` file after confirming the store's actual payment details:
