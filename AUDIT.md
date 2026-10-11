@@ -2,7 +2,7 @@
 
 ## Status
 
-**PARTIALLY AUDITED — UNIT/SYNTAX CI PASS; LIVE INTEGRATION AND DEPENDENCY AUDIT REMAIN.**
+**PARTIALLY AUDITED — FOLLOW-UP PATCH (2026-10-11): CI VALIDATION PENDING; LIVE DISCORD/MONGODB TESTS AND DEPENDENCY/SECRET-HISTORY REVIEW STILL REMAIN.**
 
 - Repository: `ReyinGamerz/RapStore-Assistant`
 - Base branch/commit: `main` / `55b45b1c7487aa64112425cdc690e3b6f52151c7`
@@ -48,7 +48,7 @@ The audit branch fixes the confirmed runtime defects, shared catalog selection b
 | `test/ticket-recovery.test.js` | Missing-channel recovery regression tests | ADDED — PASS CI | Tests shared timestamp and invalid identifiers |
 | `package.json` | Runtime/dependencies/npm scripts | UPDATED — CI PENDING | `npm start` directly runs `node src/index.js`; tests/checks remain manual commands, and syntax checks include `src/catalog-state.js` |
 | `.github/workflows/ci.yml` | GitHub Actions | REVIEWED — PASS | Explicit `contents: read` workflow token permission and production dependency advisory check; latest run [#38048815221](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38048815221) passed |
-| `README.md` | Setup/operation guide | REVIEWED — UPDATED | Aligned with global commands and automatic validation |
+| `README.md` | Setup/operation guide | UPDATED — CI PENDING | Documents direct `npm start`, manual test/check commands, and public non-ephemeral owner-bound catalog panels |
 | `AUDIT.md` | Audit log/report | REVIEWED — UPDATED | Records scope, findings, remediation, CI evidence, and residual risks |
 | `.env.example` | Environment template | REVIEWED — UPDATED | Removed `DISCORD_GUILD_ID` |
 | `.gitignore` | Local secret/runtime exclusions | REVIEWED | Ignores `.env` and `.env.*`, with `.env.example` explicitly allowed |
@@ -142,6 +142,7 @@ No production Discord server, MongoDB database, or VPS was modified.
 |---|---|---|---|
 | Existing `test/security.test.js` | Unit | PASS | Unit tests passed in latest source validation run [#38048874980](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38048874980) |
 | New `test/ticket-recovery.test.js` | Regression unit | PASS | Added on audit branch and passed in latest source validation run [#38048874980](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38048874980) |
+| New `test/catalog-state.test.js` | Regression unit | CI PENDING | New tests for category wraparound and invalid/stale indexes |
 | New `test/catalog-state.test.js` | Regression unit | CI PENDING | Tests wraparound, one category, empty lists, and invalid/stale indexes |
 | `npm run check` | Syntax | PASS | All configured `node --check` commands passed in latest source validation run [#38048874980](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38048874980) |
 | Maintenance shutdown | Static review | PASS (code review) | Timer clear and active-run wait are wired; no live shutdown test |
