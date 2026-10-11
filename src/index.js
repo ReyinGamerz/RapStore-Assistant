@@ -633,6 +633,22 @@ async function handleFounderPanelButton(interaction) {
   const action = parts[2];
   if (action === "addcategory") { await interaction.showModal(buildCategoryModal("add")); return; }
   if (action === "editcategory") { await showCategoryManagePicker(interaction, "editcategorymanage"); return; }
+  if (action === "editselected") {
+    const id = parts[3] || "";
+    if (!ObjectId.isValid(id)) { await interaction.reply(v2Payload({content:"Pilih produk terlebih dahulu.",flags:EPHEMERAL|MessageFlags.IsComponentsV2})); return; }
+    const product = await getDatabase().collection("products").findOne({_id:new ObjectId(id)});
+    if (!product) { await interaction.reply(v2Payload({content:"Produk tidak ditemukan atau sudah dihapus. Muat ulang panel.",flags:EPHEMERAL|MessageFlags.IsComponentsV2})); return; }
+    await interaction.showModal(buildProductModal("edit", product.category || "Umum", product));
+    return;
+  }
+  if (action === "deleteselected") {
+    const id = parts[3] || "";
+    if (!ObjectId.isValid(id)) { await interaction.reply(v2Payload({content:"Pilih produk terlebih dahulu.",flags:EPHEMERAL|MessageFlags.IsComponentsV2})); return; }
+    const product = await getDatabase().collection("products").findOne({_id:new ObjectId(id)});
+    if (!product) { await interaction.reply(v2Payload({content:"Produk tidak ditemukan atau sudah dihapus. Muat ulang panel.",flags:EPHEMERAL|MessageFlags.IsComponentsV2})); return; }
+    await interaction.update(buildDeleteConfirmation("KONFIRMASI HAPUS PRODUK", "Produk **"+safeText(product.name,100)+"** akan dihapus dari katalog. Tindakan ini tidak bisa dibatalkan.", "rapstore:panel:confirmdeleteproduct:"+id, "rapstore:panel:canceldeleteproduct"));
+    return;
+  }
   if (action === "deletecategory") { await showCategoryManagePicker(interaction, "deletecategorymanage"); return; }
   if (action === "add") {
     await interaction.deferReply({ flags: EPHEMERAL | MessageFlags.IsComponentsV2 });
@@ -691,6 +707,22 @@ async function handleFounderPanelSelect(interaction) {
   }
   const parts = interaction.customId.split(":");
   const mode = parts[2];
+  if (mode === "editproductcategory") {
+    const categoryName = decodeCategory(interaction.values[0]);
+    const valid = (await getProductCategories()).some(item => item.name === categoryName);
+    if (!valid) { await interaction.update(v2Payload({content:"Kategori tidak ditemukan. Muat ulang panel Edit Produk.",flags:EPHEMERAL|MessageFlags.IsComponentsV2})); return; }
+    await renderProductManagementPanel(interaction, categoryName, "", "update");
+    return;
+  }
+  if (mode === "editproduct") {
+    const categoryName = decodeCategory(parts[3] || "");
+    const id = interaction.values[0];
+    if (!ObjectId.isValid(id)) { await interaction.update(v2Payload({content:"Produk tidak valid. Pilih produk lain.",flags:EPHEMERAL|MessageFlags.IsComponentsV2})); return; }
+    const product = await getDatabase().collection("products").findOne({_id:new ObjectId(id),category:categoryName});
+    if (!product) { await interaction.update(v2Payload({content:"Produk sudah tidak tersedia di kategori ini. Pilih ulang.",flags:EPHEMERAL|MessageFlags.IsComponentsV2})); return; }
+    await renderProductManagementPanel(interaction, categoryName, id, "update");
+    return;
+  }
   if (mode === "addcategory") {
     const chosen = decodeCategory(interaction.values[0]);
     if (!chosen) {
