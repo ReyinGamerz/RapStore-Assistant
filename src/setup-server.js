@@ -67,7 +67,7 @@ export async function setupServer(guild) {
     ];
     const category = await guild.channels.create({ name: section.name, type: ChannelType.GuildCategory, permissionOverwrites: categoryOverwrites, reason: "/setupserver layout" });
     created.push(category.name);
-    for (const spec of section.channels) {
+    for (const [channelIndex, spec] of section.channels.entries()) {
       let allowedNames;
       if (spec.access === "public") allowedNames = publicRoles;
       else if (spec.access === "staff") allowedNames = staffRoles;
@@ -77,8 +77,10 @@ export async function setupServer(guild) {
         { id: everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
         ...allowedNames.map(name => ({ id: roleMap.get(name).id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory, ...(spec.send ? [PermissionFlagsBits.SendMessages, PermissionFlagsBits.AddReactions] : [])], deny: spec.send ? [] : [PermissionFlagsBits.SendMessages] })),
       ];
-      await guild.channels.create({ name: spec.name, type: spec.type, parent: category.id, permissionOverwrites: overwrites, reason: "/setupserver layout" });
-      created.push(spec.name);
+      const treePrefix = channelIndex === 0 ? "╭" : channelIndex === section.channels.length - 1 ? "╰" : "┊";
+      const channelName = treePrefix + "・" + spec.name.replace("・", "：");
+      await guild.channels.create({ name: channelName, type: spec.type, parent: category.id, permissionOverwrites: overwrites, reason: "/setupserver layout" });
+      created.push(channelName);
     }
   }
   return { roles: ROLE_NAMES.length, channels: created.length - LAYOUT.length, categories: LAYOUT.length };
