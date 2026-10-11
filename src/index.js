@@ -633,6 +633,19 @@ async function handleFounderPanelButton(interaction) {
   const action = parts[2];
   if (action === "addcategory") { await interaction.showModal(buildCategoryModal("add")); return; }
   if (action === "editcategory") { await showCategoryManagePicker(interaction, "editcategorymanage"); return; }
+  if (action === "editcategoryselected" || action === "deletecategoryselected") {
+    const id = parts[3] || "";
+    if (!ObjectId.isValid(id)) { await interaction.reply(v2Payload({content:"Pilih kategori terlebih dahulu.",flags:EPHEMERAL|MessageFlags.IsComponentsV2})); return; }
+    const record = await getDatabase().collection("categories").findOne({_id:new ObjectId(id)});
+    if (!record) { await interaction.reply(v2Payload({content:"Kategori tidak ditemukan. Muat ulang panel.",flags:EPHEMERAL|MessageFlags.IsComponentsV2})); return; }
+    if (action === "editcategoryselected") { await interaction.showModal(buildCategoryModal("edit",record)); return; }
+    if (record.name.trim().toLocaleLowerCase("id-ID") === "umum") {
+      await interaction.reply(v2Payload({content:"Kategori bawaan Umum tidak dapat dihapus.",flags:EPHEMERAL|MessageFlags.IsComponentsV2})); return;
+    }
+    const count = await getDatabase().collection("products").countDocuments({category:record.name});
+    await interaction.update(buildDeleteConfirmation("KONFIRMASI HAPUS KATEGORI", "Kategori **"+safeText(record.name,80)+"** akan dihapus bersama **"+count+" produk** di dalamnya. Tindakan ini tidak bisa dibatalkan.", "rapstore:panel:confirmdeletecategory:"+id, "rapstore:panel:canceldeletecategory"));
+    return;
+  }
   if (action === "editselected") {
     const id = parts[3] || "";
     if (!ObjectId.isValid(id)) { await interaction.reply(v2Payload({content:"Pilih produk terlebih dahulu.",flags:EPHEMERAL|MessageFlags.IsComponentsV2})); return; }
@@ -734,9 +747,16 @@ async function handleFounderPanelSelect(interaction) {
   }
   if (mode === "editcategorymanage") {
     const name = decodeCategory(interaction.values[0]);
-    const cached = categoryPickerCache.get(interaction.user.id + ":" + mode + ":" + interaction.values[0]);
-    const category = cached || (await getProductCategories()).find(item => item.name === name);
-    await interaction.showModal(buildCategoryModal("edit",{name,emoji:category?.emoji||""}));
+    if (!name) { await interaction.update(v2Payload({content:"Kategori tidak valid. Muat ulang panel.",flags:EPHEMERAL|MessageFlags.IsComponentsV2})); return; }
+    const category = (await getProductCategories()).find(item => item.name === name);
+    if (!category) { await interaction.update(v2Payload({content:"Kategori tidak ditemukan. Muat ulang panel.",flags:EPHEMERAL|MessageFlags.IsComponentsV2})); return; }
+    const record = await ensureCategoryRecord(name, category.emoji || "");
+    const panel = buildPanel("EDIT KATEGORI", "Kategori dipilih: **"+safeText(name,80)+"**. Tekan Edit untuk mengubah nama/emoji, atau Hapus untuk menghapus kategori beserta produknya.");
+    panel.addActionRowComponents(new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId("rapstore:panel:editcategoryselected:"+String(record._id)).setLabel("Edit").setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId("rapstore:panel:deletecategoryselected:"+String(record._id)).setLabel("Hapus").setStyle(ButtonStyle.Danger).setDisabled(name.trim().toLocaleLowerCase("id-ID") === "umum")
+    ));
+    await interaction.update({flags:MessageFlags.IsComponentsV2|MessageFlags.Ephemeral,components:[panel]});
     return;
   }
   if (mode === "deletecategorymanage") {
