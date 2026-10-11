@@ -988,7 +988,8 @@ async function handleInteraction(interaction) {
   if (interaction.commandName === "catalog") {
     if (!interaction.inGuild()) { await interaction.reply(v2Payload({ content: "Katalog publik hanya bisa dibuat di channel server.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 })); return; }
     if (!hasStaffRole(interaction.member)) { await interaction.reply(v2Payload({ content: "Command /catalog hanya untuk Founder/Admin. Member cukup menggunakan pesan katalog publik yang sudah tersedia.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 })); return; }
-    await upsertPersistentPanel(interaction, "catalog", await buildCatalogPayload());
+    const savedCatalog = await getDatabase().collection("persistent_panels").findOne({ guildId: interaction.guildId, type: "catalog" });
+    await upsertPersistentPanel(interaction, "catalog", await buildCatalogPayload(savedCatalog?.selectedCategory || "", savedCatalog?.selectedProductId || ""));
   }
 }
 
