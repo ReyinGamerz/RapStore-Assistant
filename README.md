@@ -23,7 +23,7 @@ For a new install, run `npm install`, copy `.env.example` to `.env`, then set `D
 ## Active commands
 - `/catalog` — Founder/Admin-only command to create or sync the public catalog message. Members use the public catalog message itself.
 - `/panel` — Founder/Admin-only, private (ephemeral) management panel. It never posts a new public management panel.
-- Slash commands are registered globally without `DISCORD_GUILD_ID`. On startup, the bot refreshes global commands and attempts to remove legacy guild-scoped copies from every server it can currently enumerate. Runtime role checks remain authoritative even if Discord temporarily caches old command metadata.
+- Slash commands are registered globally only; startup calls the global application-command endpoint and does not register or clean commands per guild. If migrating from an older version that left duplicate guild-scoped commands, run `npm run commands:refresh` once: this explicitly refreshes global commands and clears legacy guild copies from the servers the bot can enumerate. Runtime role checks remain authoritative.
 - `npm start` directly runs `node src/index.js`; it does not run tests first. For a manual pre-deploy check, run `npm test` and `npm run check`. Run `npm run commands:refresh` to refresh commands without starting the full bot.
 - The bot refreshes the saved public catalog on startup and removes any legacy public management-panel message recorded by older versions. Catalog data is refreshed after product/category changes made through the private `/panel`.
 - Ticket creation shows a temporary “TIKET SEDANG DIBUAT” status before reporting success or failure.
