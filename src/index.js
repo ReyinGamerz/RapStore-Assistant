@@ -1408,10 +1408,10 @@ async function main() {
   const readyClient = client.isReady() ? client : await ready;
   stopOrderMaintenance = startOrderMaintenance(client);
   try {
-    await refreshGlobalCommands({ guildIds: [...readyClient.guilds.cache.keys()] });
+    await refreshGlobalCommands();
   } catch (error) {
     logError("global-command-refresh", error);
-    console.error("Bot tetap berjalan, tetapi refresh global slash commands atau pembersihan command guild lama belum selesai. Periksa izin aplikasi bot dan jalankan npm run commands:refresh lagi.");
+    console.error("Bot tetap berjalan, tetapi refresh global slash commands belum selesai. Periksa izin aplikasi bot dan jalankan npm run commands:refresh lagi.");
   }
 }
 
