@@ -973,7 +973,7 @@ async function buildCatalogPayload(selectedCategory = "", selectedProductId = ""
   }
 
   const panel = buildPanel("");
-  panel.addTextDisplayComponents(new TextDisplayBuilder().setContent("### <:rap5:1558864967812390952> RAPSTORE — CATALOG"));
+  panel.addTextDisplayComponents(new TextDisplayBuilder().setContent("### <:Catalog:1558470276981850132> RAPSTORE — CATALOG"));
   panel.addSeparatorComponents(new SeparatorBuilder());
   panel.addTextDisplayComponents(new TextDisplayBuilder().setContent(lines.join("\n").slice(0, 3900)));
   panel.addSeparatorComponents(new SeparatorBuilder());
