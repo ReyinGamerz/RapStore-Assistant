@@ -13,6 +13,7 @@ import { buildMessage, buildComponentsOnly, buildPanel } from "./ui.js";
 import { isStaffMember, canAccessTicket, canManuallyCloseTicket } from "./security.js";
 import { reconcileMissingTicket } from "./ticket-recovery.js";
 import { wrapCategoryIndex } from "./catalog-state.js";
+import { extractSingleEmojiFile, extractEmojiFilesFromZip } from "./emoji-import.js";
 import { allocateTicketNumber, initializeOrderTicket, handleOrderInteraction, handleOrderMessage, archiveAndDeleteTicket, startOrderMaintenance } from "./order-system.js";
 
 let client;
@@ -21,7 +22,6 @@ let stopOrderMaintenance;
 const EPHEMERAL = MessageFlags.Ephemeral;
 const productPickerCache = new Map();
 const categoryPickerCache = new Map();
-const catalogPanelLocks = new Map();
 
 function v2Payload(payload) {
   const flags = payload?.flags ?? 0;
@@ -47,6 +47,12 @@ async function fetchMessageOrNull(channel, messageId) {
 }
 function hasStaffRole(member) {
   return isStaffMember(member, [config.ids.founderRole, config.ids.adminRole]);
+}
+function hasFounderRole(member) {
+  return Boolean(member?.roles?.cache?.has(config.ids.founderRole));
+}
+function configuredPanelChannelId(type) {
+  return type === "catalog" ? config.channels.catalog : config.channels.adminPanel;
 }
 async function audit(action, interaction, details = {}) {
   try { await getDatabase().collection("audit_logs").insertOne({ action, actorId: interaction.user.id, guildId: interaction.guildId, details, createdAt: new Date() }); }
@@ -241,35 +247,62 @@ function buildFounderPanelPayload() {
   return { flags: MessageFlags.IsComponentsV2, components: [panel] };
 }
 
-async function upsertPersistentPanel(interaction, type, payload) {
-  await interaction.deferReply({ flags: EPHEMERAL | MessageFlags.IsComponentsV2 });
-  const db = getDatabase();
-  const collection = db.collection("persistent_panels");
-  let record = await collection.findOne({ guildId: interaction.guildId, type });
+async function ensurePersistentPanel(guildId, type, channelId, payload) {
+  const channel = await fetchChannelOrNull(client, channelId);
+  if (!channel || typeof channel.send !== "function" || channel.guildId !== guildId) {
+    throw new Error("Channel tujuan " + channelId + " tidak tersedia atau bukan milik server ini.");
+  }
+
+  const collection = getDatabase().collection("persistent_panels");
+  const record = await collection.findOne({ guildId, type });
   let message = null;
   if (record) {
-    const channel = await fetchChannelOrNull(client, record.channelId);
-    if (channel?.messages) message = await fetchMessageOrNull(channel, record.messageId);
-    if (message) await message.edit(payload);
-  }
-  if (!message) {
-    if (!interaction.channel || typeof interaction.channel.send !== "function") {
-      await interaction.editReply(v2Payload({ content: "Jalankan command ini di channel teks server agar panel publik bisa dibuat.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
-      return;
+    if (record.channelId === channelId) {
+      message = await fetchMessageOrNull(channel, record.messageId);
+    } else {
+      const oldChannel = await fetchChannelOrNull(client, record.channelId);
+      if (oldChannel?.messages) {
+        const oldMessage = await fetchMessageOrNull(oldChannel, record.messageId);
+        if (oldMessage) await oldMessage.delete().catch(error => logError("old-" + type + "-panel-delete", error));
+      }
     }
-    message = await interaction.channel.send(payload);
-    const panelUpdate = { guildId: interaction.guildId, type, channelId: message.channelId, messageId: message.id, updatedAt: new Date() };
-    if (type === "catalog") Object.assign(panelUpdate, { selectedCategory: "", selectedProductId: "" });
-    await collection.updateOne({ guildId: interaction.guildId, type }, { $set: panelUpdate }, { upsert: true });
-  } else {
-    const panelUpdate = { updatedAt: new Date() };
-    if (type === "catalog") Object.assign(panelUpdate, { selectedCategory: "", selectedProductId: "" });
-    await collection.updateOne({ guildId: interaction.guildId, type }, { $set: panelUpdate });
   }
-  await interaction.editReply(v2Payload({
-    content: type === "catalog" ? "Katalog publik berhasil disinkronkan." : "Panel katalog publik berhasil disinkronkan.",
-    flags: EPHEMERAL | MessageFlags.IsComponentsV2,
-  }));
+
+  if (message) await message.edit(payload);
+  else message = await channel.send(payload);
+
+  const panelUpdate = {
+    guildId,
+    type,
+    channelId: message.channelId,
+    messageId: message.id,
+    updatedAt: new Date(),
+  };
+  if (type === "catalog") {
+    panelUpdate.selectedCategory = record?.selectedCategory || "";
+    panelUpdate.selectedProductId = record?.selectedProductId || "";
+  }
+  await collection.updateOne({ guildId, type }, { $set: panelUpdate }, { upsert: true });
+  return message;
+}
+
+async function upsertPersistentPanel(interaction, type, payload) {
+  await interaction.deferReply({ flags: EPHEMERAL | MessageFlags.IsComponentsV2 });
+  try {
+    await ensurePersistentPanel(interaction.guildId, type, configuredPanelChannelId(type), payload);
+    await interaction.editReply(v2Payload({
+      content: type === "catalog"
+        ? "Katalog publik disinkronkan di channel katalog."
+        : "Panel publik disinkronkan di channel panel admin.",
+      flags: EPHEMERAL | MessageFlags.IsComponentsV2,
+    }));
+  } catch (error) {
+    logError("panel-upsert-" + type, error);
+    await interaction.editReply(v2Payload({
+      content: "Panel tidak bisa diperbarui. Pastikan channel tujuan tersedia dan bot memiliki izin melihat channel serta mengirim/mengelola pesan.",
+      flags: EPHEMERAL | MessageFlags.IsComponentsV2,
+    }));
+  }
 }
 
 async function showFounderPanel(interaction) {
@@ -277,57 +310,115 @@ async function showFounderPanel(interaction) {
     await interaction.reply(v2Payload({ content: "Panel hanya untuk Founder/Admin.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
     return;
   }
-  // The management panel must never be posted publicly. Keep it ephemeral to the staff member.
-  await interaction.reply({
-    ...buildFounderPanelPayload(),
-    flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral,
-  });
+  await upsertPersistentPanel(interaction, "panel", buildFounderPanelPayload());
+}
+
+async function handleAddEmojiCommand(interaction) {
+  if (!interaction.inGuild()) {
+    await interaction.reply(v2Payload({ content: "Command ini hanya bisa digunakan di server Discord.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
+    return;
+  }
+  if (!hasFounderRole(interaction.member)) {
+    await interaction.reply(v2Payload({ content: "Command /addemoji hanya untuk Founder.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
+    return;
+  }
+
+  const attachment = interaction.options.getAttachment("file", true);
+  if (Number(attachment.size || 0) > 20 * 1024 * 1024) {
+    await interaction.reply(v2Payload({ content: "File maksimal 20 MiB. Untuk ZIP, setiap gambar emoji harus maksimal 256 KiB.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
+    return;
+  }
+
+  await interaction.deferReply({ flags: EPHEMERAL | MessageFlags.IsComponentsV2 });
+  try {
+    const response = await fetch(attachment.url);
+    if (!response.ok) throw new Error("Gagal mengunduh lampiran dari Discord.");
+    const data = Buffer.from(await response.arrayBuffer());
+    if (data.length > 20 * 1024 * 1024) throw new Error("File maksimal 20 MiB.");
+
+    const filename = String(attachment.name || "emoji");
+    let files;
+    let skipped = [];
+    if (/\.zip$/i.test(filename)) {
+      const result = extractEmojiFilesFromZip(data);
+      files = result.files;
+      skipped = result.skipped;
+    } else {
+      files = extractSingleEmojiFile(filename, data);
+    }
+
+    const existingNames = new Set(interaction.guild.emojis.cache.map(emoji => emoji.name));
+    const added = [];
+    const failed = [];
+    for (const file of files) {
+      if (existingNames.has(file.name)) {
+        skipped.push(file.filename + ": nama emoji " + file.name + " sudah digunakan");
+        continue;
+      }
+      try {
+        await interaction.guild.emojis.create({
+          attachment: file.data,
+          name: file.name,
+          reason: "Emoji import requested by Founder " + interaction.user.id,
+        });
+        existingNames.add(file.name);
+        added.push(file.name);
+      } catch (error) {
+        failed.push(file.name + ": " + String(error?.message || "gagal ditambahkan").slice(0, 120));
+      }
+    }
+
+    const lines = [
+      "Berhasil ditambahkan: **" + added.length + "**",
+      added.length ? added.map(name => "`:" + name + ":`").join(", ").slice(0, 1200) : "Tidak ada emoji yang berhasil ditambahkan.",
+    ];
+    if (failed.length) lines.push("", "Gagal: " + failed.slice(0, 10).join("; ").slice(0, 1000));
+    if (skipped.length) lines.push("", "Dilewati: " + skipped.slice(0, 10).join("; ").slice(0, 1000));
+    await interaction.editReply({ flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral, components: [buildPanel("HASIL IMPORT EMOJI", lines.join("\n"))] });
+  } catch (error) {
+    logError("founder-add-emoji", error);
+    await interaction.editReply(v2Payload({
+      content: String(error?.message || "Import emoji gagal.").slice(0, 1800),
+      flags: EPHEMERAL | MessageFlags.IsComponentsV2,
+    }));
+  }
 }
 
 async function refreshPersistentPanels(readyClient, onlyType = null) {
   const db = getDatabase();
-  const filter = onlyType ? { type: onlyType } : {};
-  const records = await db.collection("persistent_panels").find(filter).toArray();
-  for (const record of records) {
-    try {
-      // Remove old public management panels left by versions that exposed /panel.
-      if (record.type === "panel") {
-        const oldChannel = await fetchChannelOrNull(readyClient, record.channelId);
-        if (!oldChannel?.messages) {
-          console.error("[persistent-panel] Cannot access legacy public panel channel; keeping cleanup record to retry.");
-          continue;
-        }
-        const oldMessage = await fetchMessageOrNull(oldChannel, record.messageId);
-        if (oldMessage) {
-          try {
-            await oldMessage.delete();
-          } catch (error) {
-            logError("legacy-public-panel-delete", error);
-            console.error("[persistent-panel] Could not delete legacy public panel; keeping cleanup record to retry.");
-            continue;
-          }
-        }
-        await db.collection("persistent_panels").deleteOne({ _id: record._id });
-        console.log("[persistent-panel] Removed legacy public management panel; /panel is now ephemeral.");
-        continue;
+  const types = onlyType ? [onlyType] : ["catalog", "panel"];
+  for (const guild of readyClient.guilds.cache.values()) {
+    for (const type of types) {
+      try {
+        const channelId = configuredPanelChannelId(type);
+        const record = await db.collection("persistent_panels").findOne({ guildId: guild.id, type });
+        const payload = type === "catalog"
+          ? await buildCatalogPayload(record?.selectedCategory || "")
+          : buildFounderPanelPayload();
+        await ensurePersistentPanel(guild.id, type, channelId, payload);
+      } catch (error) {
+        logError("persistent-panel-startup-sync-" + type + "-" + guild.id, error);
       }
-      const payload = record.type === "catalog"
-        ? await buildCatalogPayload("", "")
-        : null;
-      if (!payload) continue;
-      const channel = await fetchChannelOrNull(readyClient, record.channelId);
-      if (!channel || typeof channel.send !== "function") { console.error("[persistent-panel] Saved channel unavailable for " + record.type); continue; }
-      let message = await fetchMessageOrNull(channel, record.messageId);
-      if (message) {
-        await message.edit(payload);
-      } else {
-        message = await channel.send(payload);
-        await db.collection("persistent_panels").updateOne({ _id: record._id }, { $set: { messageId: message.id, channelId: message.channelId, updatedAt: new Date() } });
-      }
-    } catch (error) { logError("persistent-panel-sync-" + record.type, error); }
+    }
   }
-  await refreshUserCatalogPanels(readyClient);
+
+  if (!onlyType) {
+    const legacyPanels = await db.collection("catalog_user_panels").find({}).toArray();
+    for (const record of legacyPanels) {
+      try {
+        const channel = await fetchChannelOrNull(readyClient, record.channelId);
+        if (channel?.messages) {
+          const message = await fetchMessageOrNull(channel, record.messageId);
+          if (message && message.author?.id === readyClient.user?.id) await message.delete();
+        }
+      } catch (error) {
+        logError("legacy-user-catalog-panel-cleanup", error);
+      }
+    }
+    await db.collection("catalog_user_panels").deleteMany({});
+  }
 }
+
 async function showCategoryManagePicker(interaction, mode) {
   await interaction.deferReply({ flags: EPHEMERAL | MessageFlags.IsComponentsV2 });
   const categories = await getProductCategories();
@@ -638,7 +729,7 @@ async function catalogData(db) {
   return { categories: normalized, products };
 }
 
-async function buildCatalogPayload(selectedCategory = "", selectedProductId = "", ownerId = "") {
+async function buildCatalogPayload(selectedCategory = "", selectedProductId = "") {
   const db = getDatabase();
   const { categories, products } = await catalogData(db);
   const category = categories.includes(selectedCategory) ? selectedCategory : (categories[0] || "");
@@ -676,18 +767,14 @@ async function buildCatalogPayload(selectedCategory = "", selectedProductId = ""
 
   const panel = buildPanel("");
   panel.addTextDisplayComponents(new TextDisplayBuilder().setContent("### <:Catalog:1558470276981850132> RAPSTORE — CATALOG"));
-  if (ownerId) {
-    panel.addTextDisplayComponents(new TextDisplayBuilder().setContent("Panel publik khusus <@" + ownerId + ">. Hanya pemilik panel ini yang dapat mengubah kategori di sini."));
-  }
   panel.addSeparatorComponents(new SeparatorBuilder());
   panel.addTextDisplayComponents(new TextDisplayBuilder().setContent(lines.join("\n").slice(0, 3900)));
   panel.addSeparatorComponents(new SeparatorBuilder());
 
   const categoryRecords = await getProductCategories();
   const categoryEmojiMap = new Map(categoryRecords.map(item => [item.name, item.emoji]));
-  const ownerSuffix = ownerId ? ":" + ownerId : "";
   const categoryMenu = new StringSelectMenuBuilder()
-    .setCustomId("rapstore:catalog:category" + ownerSuffix)
+    .setCustomId("rapstore:catalog:category")
     .setPlaceholder(category ? ("Kategori: " + categoryDisplay({name:category,emoji:categoryEmojiMap.get(category)}).name).slice(0, 150) : "Pilih Kategori")
     .setMinValues(1).setMaxValues(1)
     .addOptions((categories.length ? categories : ["Belum ada kategori"]).slice(0, 25).map(c => {
@@ -699,7 +786,7 @@ async function buildCatalogPayload(selectedCategory = "", selectedProductId = ""
   if (!categories.length) categoryMenu.setDisabled(true);
 
   const productMenu = new StringSelectMenuBuilder()
-    .setCustomId("rapstore:catalog:product" + ownerSuffix)
+    .setCustomId("rapstore:catalog:product")
     .setPlaceholder(selectedProduct ? safeText(selectedProduct.name, 150) : "Pilih Produk")
     .setMinValues(1).setMaxValues(1);
   const productOptions = list.slice(0, 25).map(p => {
@@ -728,17 +815,17 @@ async function buildCatalogPayload(selectedCategory = "", selectedProductId = ""
   const pageLabel = categories.length ? (Math.max(0, categoryIndex) + 1) + "/" + categories.length : "0/0";
   panel.addActionRowComponents(new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId("rapstore:catalog:category-page:prev:" + Math.max(0, categoryIndex) + ownerSuffix)
+      .setCustomId("rapstore:catalog:category-page:prev:" + Math.max(0, categoryIndex))
       .setLabel("PREV")
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(categories.length <= 1),
     new ButtonBuilder()
-      .setCustomId("rapstore:catalog:category-page:counter:" + Math.max(0, categoryIndex) + ownerSuffix)
+      .setCustomId("rapstore:catalog:category-page:counter:" + Math.max(0, categoryIndex))
       .setLabel(pageLabel)
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(true),
     new ButtonBuilder()
-      .setCustomId("rapstore:catalog:category-page:next:" + Math.max(0, categoryIndex) + ownerSuffix)
+      .setCustomId("rapstore:catalog:category-page:next:" + Math.max(0, categoryIndex))
       .setLabel("NEXT")
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(categories.length <= 1),
@@ -750,262 +837,61 @@ async function buildCatalogPayload(selectedCategory = "", selectedProductId = ""
   };
 }
 
-function catalogPanelIdentity(interaction) {
-  return {
-    guildId: interaction.guildId,
-    channelId: interaction.channelId,
-    userId: interaction.user.id,
-  };
-}
-
-function catalogPanelLockKey(identity) {
-  return identity.guildId + ":" + identity.channelId + ":" + identity.userId;
-}
-
-async function withCatalogPanelLock(key, work) {
-  const previous = catalogPanelLocks.get(key) || Promise.resolve();
-  let release;
-  const gate = new Promise(resolve => { release = resolve; });
-  const queued = previous.catch(() => {}).then(() => gate);
-  catalogPanelLocks.set(key, queued);
-  await previous.catch(() => {});
-  try {
-    return await work();
-  } finally {
-    release();
-    if (catalogPanelLocks.get(key) === queued) catalogPanelLocks.delete(key);
-  }
-}
-
-async function persistCatalogPanelState(interaction, messageId, selectedCategory, selectedProductId = "") {
-  const identity = catalogPanelIdentity(interaction);
-  await getDatabase().collection("catalog_user_panels").updateOne(identity, {
-    $set: {
-      ...identity,
-      messageId: String(messageId),
-      selectedCategory: safeText(selectedCategory, 80),
-      selectedProductId: String(selectedProductId || ""),
-      updatedAt: new Date(),
-    },
-  }, { upsert: true });
-}
-
-async function ensureUserCatalogPanel(interaction, selectedCategory = "", selectedProductId = "") {
-  const identity = catalogPanelIdentity(interaction);
-  const lockKey = catalogPanelLockKey(identity);
-  return withCatalogPanelLock(lockKey, async () => {
-    const collection = getDatabase().collection("catalog_user_panels");
-    const record = await collection.findOne(identity);
-    let message = null;
-    const channel = interaction.channel;
-
-    if (record && channel?.messages) {
-      message = await fetchMessageOrNull(channel, record.messageId);
-      if (message && message.author?.id !== client?.user?.id) message = null;
-    }
-
-    const { categories } = await catalogData(getDatabase());
-    const category = categories.includes(selectedCategory) ? selectedCategory : (categories[0] || "");
-    const payload = await buildCatalogPayload(category, selectedProductId, interaction.user.id);
-
-    if (message) {
-      await message.edit(payload);
-    } else {
-      if (record) await collection.deleteOne(identity);
-      if (!channel || typeof channel.send !== "function") {
-        throw new Error("The catalog interaction channel cannot send public messages.");
-      }
-      message = await channel.send(payload);
-    }
-
-    await persistCatalogPanelState(interaction, message.id, category, selectedProductId);
-    return message;
-  });
-}
-
-async function updateOwnedCatalogPanel(interaction, ownerId, selectedCategory, selectedProductId = "") {
-  const identity = catalogPanelIdentity(interaction);
-  return withCatalogPanelLock(catalogPanelLockKey(identity), async () => {
-    const { categories } = await catalogData(getDatabase());
-    const category = categories.includes(selectedCategory) ? selectedCategory : (categories[0] || "");
-    await interaction.editReply(await buildCatalogPayload(category, selectedProductId, ownerId));
-    await persistCatalogPanelState(interaction, interaction.message.id, category, selectedProductId);
-  });
-}
-
-async function refreshUserCatalogPanels(readyClient) {
-  const db = getDatabase();
-  const collection = db.collection("catalog_user_panels");
-  const records = await collection.find({}).toArray();
-  const { categories } = await catalogData(db);
-  const channelCache = new Map();
-
-  for (const record of records) {
-    const identity = {
-      guildId: record.guildId,
-      channelId: record.channelId,
-      userId: record.userId,
-    };
-    try {
-      let channel = channelCache.get(record.channelId);
-      if (!channel) {
-        channel = await fetchChannelOrNull(readyClient, record.channelId);
-        if (channel) channelCache.set(record.channelId, channel);
-      }
-      if (!channel?.messages) continue;
-
-      const message = await fetchMessageOrNull(channel, record.messageId);
-      if (!message || message.author?.id !== readyClient.user?.id) {
-        await collection.deleteOne(identity);
-        continue;
-      }
-
-      const selectedCategory = categories.includes(record.selectedCategory)
-        ? record.selectedCategory
-        : (categories[0] || "");
-      await message.edit(await buildCatalogPayload(selectedCategory, record.selectedProductId || "", record.userId));
-      if (selectedCategory !== record.selectedCategory) {
-        await collection.updateOne(identity, {
-          $set: {
-            selectedCategory,
-            selectedProductId: "",
-            updatedAt: new Date(),
-          },
-        });
-      }
-    } catch (error) {
-      logError("catalog-user-panel-refresh-" + record.userId, error);
-    }
-  }
-}
-
-function catalogPanelOwner(customId, isPageButton = false) {
-  const parts = String(customId || "").split(":");
-  return isPageButton ? (parts[5] || "") : (parts[3] || "");
-}
-
-async function catalogPanelErrorNotice(interaction, error) {
-  logError("catalog-user-panel", error);
-  try {
-    await interaction.followUp(v2Payload({
-      content: "Panel katalog publik per pengguna gagal diperbarui. Pastikan bot memiliki izin melihat channel, membaca riwayat pesan, dan mengirim pesan.",
-      flags: EPHEMERAL | MessageFlags.IsComponentsV2,
-    }));
-  } catch (followUpError) {
-    logError("catalog-user-panel-notice", followUpError);
-  }
+async function persistCatalogSelection(interaction, selectedCategory, selectedProductId = "") {
+  await getDatabase().collection("persistent_panels").updateOne(
+    { guildId: interaction.guildId, type: "catalog" },
+    { $set: { selectedCategory: safeText(selectedCategory, 80), selectedProductId: String(selectedProductId || ""), updatedAt: new Date() } },
+  );
 }
 
 async function handleCatalogSelection(interaction) {
   if (!interaction.inGuild()) {
-    await interaction.reply(v2Payload({
-      content: "Katalog hanya bisa digunakan di server Discord.",
-      flags: EPHEMERAL | MessageFlags.IsComponentsV2,
-    }));
+    await interaction.reply(v2Payload({ content: "Katalog hanya bisa digunakan di server Discord.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
     return;
   }
 
   const db = getDatabase();
-  const isCategory = interaction.customId.startsWith("rapstore:catalog:category");
-  const ownerId = catalogPanelOwner(interaction.customId);
-  if (ownerId && ownerId !== interaction.user.id) {
-    await interaction.reply(v2Payload({
-      content: "Panel katalog publik ini milik pengguna lain. Gunakan katalog utama untuk membuka panelmu sendiri.",
-      flags: EPHEMERAL | MessageFlags.IsComponentsV2,
-    }));
-    return;
-  }
-
+  const isCategory = interaction.customId === "rapstore:catalog:category";
   if (isCategory) {
     const requestedCategory = safeText(interaction.values[0], 80);
     const { categories } = await catalogData(db);
     const category = categories.includes(requestedCategory) ? requestedCategory : (categories[0] || "");
-    await interaction.deferUpdate();
-
-    if (!ownerId) {
-      try {
-        await ensureUserCatalogPanel(interaction, category, "");
-      } catch (error) {
-        await catalogPanelErrorNotice(interaction, error);
-      }
-      return;
-    }
-
-    await updateOwnedCatalogPanel(interaction, ownerId, category);
+    await interaction.update(await buildCatalogPayload(category, ""));
+    await persistCatalogSelection(interaction, category, "");
     return;
   }
 
-  if (interaction.customId.startsWith("rapstore:catalog:product")) {
+  if (interaction.customId === "rapstore:catalog:product") {
     const id = String(interaction.values[0] || "");
-    await interaction.deferUpdate();
     if (id === "none") {
-      await interaction.followUp(v2Payload({
-        content: "Pilih kategori terlebih dahulu, lalu pilih produk.",
-        flags: EPHEMERAL | MessageFlags.IsComponentsV2,
-      }));
+      await interaction.reply(v2Payload({ content: "Pilih kategori terlebih dahulu, lalu pilih produk.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
       return;
     }
     if (!ObjectId.isValid(id)) {
-      await interaction.followUp(v2Payload({
-        content: "Produk tidak valid. Silakan pilih ulang.",
-        flags: EPHEMERAL | MessageFlags.IsComponentsV2,
-      }));
+      await interaction.reply(v2Payload({ content: "Produk tidak valid. Silakan pilih ulang.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
       return;
     }
     const product = await db.collection("products").findOne({ _id: new ObjectId(id), active: true });
     if (!product) {
-      await interaction.followUp(v2Payload({
-        content: "Produk tidak ditemukan atau sudah tidak aktif. Silakan pilih ulang.",
-        flags: EPHEMERAL | MessageFlags.IsComponentsV2,
-      }));
+      await interaction.reply(v2Payload({ content: "Produk tidak ditemukan atau sudah tidak aktif. Silakan pilih ulang.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
       return;
     }
     const category = safeText(product.category || "Umum", 80);
     const unitPrice = Number(product.price);
     if (!Number.isSafeInteger(unitPrice) || unitPrice < 1) {
-      await interaction.followUp(v2Payload({
-        content: "Harga produk ini belum valid. Hubungi Founder/Admin agar harga diperbaiki sebelum memesan.",
-        flags: EPHEMERAL | MessageFlags.IsComponentsV2,
-      }));
+      await interaction.reply(v2Payload({ content: "Harga produk ini belum valid. Hubungi Founder/Admin agar harga diperbaiki sebelum memesan.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
       return;
     }
 
-    if (!ownerId) {
-      try {
-        await ensureUserCatalogPanel(interaction, category, id);
-      } catch (error) {
-        await catalogPanelErrorNotice(interaction, error);
-        return;
-      }
-    } else {
-      const record = await db.collection("catalog_user_panels").findOne({
-        ...catalogPanelIdentity(interaction),
-        userId: ownerId,
-        messageId: interaction.message.id,
-      });
-      if (!record || (record.selectedCategory && record.selectedCategory !== category)) {
-        await interaction.followUp(v2Payload({
-          content: "Pilihan produk sudah tidak cocok dengan kategori panel ini. Pilih kategorinya lagi lalu pilih produk yang tampil.",
-          flags: EPHEMERAL | MessageFlags.IsComponentsV2,
-        }));
-        return;
-      }
-      await updateOwnedCatalogPanel(interaction, ownerId, category, id);
-    }
-
+    await interaction.update(await buildCatalogPayload(category, id));
+    await persistCatalogSelection(interaction, category, id);
     const confirmPanel = buildPanel(
       "KONFIRMASI PESANAN",
       "Lu memilih produk **" + safeText(product.name, 100) + "** dengan harga **" + formatPrice(product.price) + "**.\n\nLanjutkan untuk membuat tiket order, atau batalkan jika berubah pikiran.",
     );
     confirmPanel.addActionRowComponents(new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId("rapstore:catalog:order:confirm:" + id)
-        .setLabel("Ya, Lanjutkan")
-        .setStyle(ButtonStyle.Success),
-      new ButtonBuilder()
-        .setCustomId("rapstore:catalog:order:cancel:" + id)
-        .setLabel("Batalkan")
-        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId("rapstore:catalog:order:confirm:" + id).setLabel("Ya, Lanjutkan").setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId("rapstore:catalog:order:cancel:" + id).setLabel("Batalkan").setStyle(ButtonStyle.Secondary),
     ));
     await interaction.followUp({
       flags: EPHEMERAL | MessageFlags.IsComponentsV2,
@@ -1017,56 +903,30 @@ async function handleCatalogSelection(interaction) {
 
 async function handleCatalogPageButton(interaction) {
   if (!interaction.inGuild()) {
-    await interaction.reply(v2Payload({
-      content: "Navigasi katalog hanya bisa digunakan di server Discord.",
-      flags: EPHEMERAL | MessageFlags.IsComponentsV2,
-    }));
+    await interaction.reply(v2Payload({ content: "Navigasi katalog hanya bisa digunakan di server Discord.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
     return;
   }
   const parts = String(interaction.customId || "").split(":");
   const action = parts[3] || "";
   const requestedIndex = Number(parts[4]);
-  const ownerId = catalogPanelOwner(interaction.customId, true);
   if (!["prev", "next"].includes(action)) {
-    await interaction.reply(v2Payload({
-      content: "Navigasi kategori tidak valid. Buka ulang katalog lalu coba lagi.",
-      flags: EPHEMERAL | MessageFlags.IsComponentsV2,
-    }));
-    return;
-  }
-  if (ownerId && ownerId !== interaction.user.id) {
-    await interaction.reply(v2Payload({
-      content: "Panel katalog publik ini milik pengguna lain. Gunakan katalog utama untuk membuka panelmu sendiri.",
-      flags: EPHEMERAL | MessageFlags.IsComponentsV2,
-    }));
+    await interaction.reply(v2Payload({ content: "Navigasi kategori tidak valid. Buka ulang katalog lalu coba lagi.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 }));
     return;
   }
 
-  await interaction.deferUpdate();
-  const db = getDatabase();
-  const { categories } = await catalogData(db);
-  let currentIndex = requestedIndex;
-  if (ownerId) {
-    const record = await db.collection("catalog_user_panels").findOne({
-      ...catalogPanelIdentity(interaction),
-      messageId: interaction.message.id,
-    });
-    if (record && categories.includes(record.selectedCategory)) {
-      currentIndex = categories.indexOf(record.selectedCategory);
-    }
-  }
+  const { categories } = await catalogData(getDatabase());
+  const saved = await getDatabase().collection("persistent_panels").findOne({
+    guildId: interaction.guildId,
+    type: "catalog",
+    messageId: interaction.message.id,
+  });
+  const currentIndex = saved && categories.includes(saved.selectedCategory)
+    ? categories.indexOf(saved.selectedCategory)
+    : requestedIndex;
   const nextIndex = wrapCategoryIndex(currentIndex, action, categories.length);
   const category = nextIndex >= 0 ? categories[nextIndex] : "";
-
-  if (!ownerId) {
-    try {
-      await ensureUserCatalogPanel(interaction, category, "");
-    } catch (error) {
-      await catalogPanelErrorNotice(interaction, error);
-    }
-    return;
-  }
-  await updateOwnedCatalogPanel(interaction, ownerId, category);
+  await interaction.update(await buildCatalogPayload(category, ""));
+  await persistCatalogSelection(interaction, category, "");
 }
 
 async function createCatalogOrderTicket(interaction, selectedProductId) {
@@ -1304,10 +1164,12 @@ async function handleInteraction(interaction) {
   }
   if (!interaction.isChatInputCommand()) return;
   if (interaction.commandName === "panel") { await showFounderPanel(interaction); return; }
+  if (interaction.commandName === "addemoji") { await handleAddEmojiCommand(interaction); return; }
   if (interaction.commandName === "catalog") {
     if (!interaction.inGuild()) { await interaction.reply(v2Payload({ content: "Katalog publik hanya bisa dibuat di channel server.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 })); return; }
     if (!hasStaffRole(interaction.member)) { await interaction.reply(v2Payload({ content: "Command /catalog hanya untuk Founder/Admin. Member cukup menggunakan pesan katalog publik yang sudah tersedia.", flags: EPHEMERAL | MessageFlags.IsComponentsV2 })); return; }
-    await upsertPersistentPanel(interaction, "catalog", await buildCatalogPayload());
+    const savedCatalog = await getDatabase().collection("persistent_panels").findOne({ guildId: interaction.guildId, type: "catalog" });
+    await upsertPersistentPanel(interaction, "catalog", await buildCatalogPayload(savedCatalog?.selectedCategory || "", savedCatalog?.selectedProductId || ""));
   }
 }
 
