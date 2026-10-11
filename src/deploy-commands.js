@@ -9,7 +9,7 @@ try {
   await client.login(config.discordToken);
   const readyClient = client.isReady() ? client : await ready;
   if (!readyClient.guilds.cache.has(config.guildId)) throw new Error("Bot tidak tergabung di GUILD_ID " + config.guildId);
-  await refreshGuildCommands();
+  await refreshGuildCommands({ guildIds: [...readyClient.guilds.cache.keys()] });
 } catch (error) {
   console.error("Global slash command refresh failed:", error instanceof Error ? error.message : error);
   process.exitCode = 1;
