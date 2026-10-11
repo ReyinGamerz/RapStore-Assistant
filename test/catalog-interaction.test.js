@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 
 const source = readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
 const orderSource = readFileSync(new URL("../src/order-system.js", import.meta.url), "utf8");
+const catalogStateSource = readFileSync(new URL("../src/catalog-state.js", import.meta.url), "utf8");
 const catalogStart = source.indexOf("async function handleCatalogSelection(interaction)");
 const catalogEnd = source.indexOf("\nfunction formatPrice(", catalogStart);
 assert.notEqual(catalogStart, -1, "catalog selection handler should exist");
@@ -18,19 +19,23 @@ function section(startMarker, endMarker) {
   return handler.slice(start, end);
 }
 
-test("category selection updates the original catalog message", () => {
+test("category selection isolates the user in a public panel and keeps the base catalog unchanged", () => {
   const category = section(
-    'if (interaction.customId === "rapstore:catalog:category")',
-    'if (interaction.customId === "rapstore:catalog:product")',
+    "if (isCategory) {",
+    'if (interaction.customId.startsWith("rapstore:catalog:product")) {',
   );
   assert.match(category, /await interaction\.deferUpdate\(\)/);
-  assert.match(category, /await interaction\.editReply\(await buildCatalogPayload\(category, ""\)\)/);
-  assert.equal(category.includes("await interaction.deferReply("), false);
+  assert.match(category, /await ensureUserCatalogPanel\(interaction, category, ""\)/);
+  assert.match(category, /await updateOwnedCatalogPanel\(interaction, ownerId, category\)/);
+  assert.doesNotMatch(category, /await interaction\.editReply\(await buildCatalogPayload/);
+  assert.match(source, /setCustomId\("rapstore:catalog:category" \+ ownerSuffix\)/);
+  assert.match(source, /setCustomId\("rapstore:catalog:category-page:next:" \+ Math\.max\(0, categoryIndex\) \+ ownerSuffix\)/);
+  assert.match(source, /ownerId !== interaction\.user\.id/);
+  assert.match(source, /catalog_user_panels/);
 });
-
 test("product selection leaves the public catalog unchanged and opens a separate ephemeral confirmation", () => {
   const product = section(
-    'if (interaction.customId === "rapstore:catalog:product")',
+    'if (interaction.customId.startsWith("rapstore:catalog:product")) {',
     "\n}\n\nasync function handleCatalogPageButton",
   );
   assert.match(product, /await interaction\.deferUpdate\(\)/);
@@ -48,15 +53,16 @@ test("catalog category navigation displays a page counter and cycles categories"
   assert.match(source, /\.setCustomId\("rapstore:catalog:category-page:prev:"/);
   assert.match(source, /\.setCustomId\("rapstore:catalog:category-page:next:"/);
   assert.match(source, /\.setLabel\(pageLabel\)/);
-  assert.match(source, /async function handleCatalogPageButton\(interaction\)[\s\S]*?\(currentIndex \+ delta \+ categories\.length\) % categories\.length/);
+  assert.match(source, /async function handleCatalogPageButton\(interaction\)[\s\S]*?wrapCategoryIndex\(currentIndex, action, categories\.length\)/);
+  assert.match(catalogStateSource, /function wrapCategoryIndex\(currentIndex, direction, categoryCount\)/);
   assert.match(source, /await handleCatalogPageButton\(interaction\); return;/);
 });
 
 test("catalog no longer exposes a ticket-destination dropdown", () => {
   assert.doesNotMatch(source, /rapstore:catalog:ticket/);
   assert.doesNotMatch(source, /Pilih Tujuan Tiket/);
-  assert.match(source, /\.setCustomId\("rapstore:catalog:category"\)/);
-  assert.match(source, /\.setCustomId\("rapstore:catalog:product"\)/);
+  assert.match(source, /\.setCustomId\("rapstore:catalog:category" \+ ownerSuffix\)/);
+  assert.match(source, /\.setCustomId\("rapstore:catalog:product" \+ ownerSuffix\)/);
 });
 
 test("confirming an order revalidates the product and uses the guarded order-ticket flow", () => {
@@ -89,6 +95,10 @@ test("catalog is staff-published and the founder panel remains ephemeral", () =>
   assert.match(source, /async function showFounderPanel\(interaction\)[\s\S]*?flags: MessageFlags\.IsComponentsV2 \| MessageFlags\.Ephemeral/);
   assert.match(source, /if \(interaction\.commandName === "catalog"\)[\s\S]*?if \(!hasStaffRole\(interaction\.member\)\)/);
   assert.match(source, /await upsertPersistentPanel\(interaction, "catalog", await buildCatalogPayload\(\)\)/);
+});
+
+test("order ticket creation no longer sends the extra INFO PESANAN message", () => {
+  assert.doesNotMatch(orderSource, /INFO PESANAN/);
 });
 
 test("catalog uses the requested custom alur and Catalog emojis", () => {

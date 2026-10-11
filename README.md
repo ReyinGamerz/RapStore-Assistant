@@ -13,6 +13,8 @@ For an existing checkout:
 cd ~/RapStore-Assistant
 git pull
 npm install
+npm test
+npm run check
 npm start
 ```
 
@@ -22,7 +24,7 @@ For a new install, run `npm install`, copy `.env.example` to `.env`, then set `D
 - `/catalog` — Founder/Admin-only command to create or sync the public catalog message. Members use the public catalog message itself.
 - `/panel` — Founder/Admin-only, private (ephemeral) management panel. It never posts a new public management panel.
 - Slash commands are registered globally without `DISCORD_GUILD_ID`. On startup, the bot refreshes global commands and attempts to remove legacy guild-scoped copies from every server it can currently enumerate. Runtime role checks remain authoritative even if Discord temporarily caches old command metadata.
-- `npm start` automatically runs `npm test` and `npm run check` first; startup stops if either fails. Run `npm run commands:refresh` only when you want to refresh commands manually without starting the full bot.
+- `npm start` directly runs `node src/index.js`; it does not run tests first. For a manual pre-deploy check, run `npm test` and `npm run check`. Run `npm run commands:refresh` to refresh commands without starting the full bot.
 - The bot refreshes the saved public catalog on startup and removes any legacy public management-panel message recorded by older versions. Catalog data is refreshed after product/category changes made through the private `/panel`.
 - Ticket creation shows a temporary “TIKET SEDANG DIBUAT” status before reporting success or failure.
 - **Edit product:** selecting a product opens its edit form directly. Change the category by entering the exact name of an existing category; new or misspelled category names are rejected.
@@ -36,7 +38,7 @@ For a new install, run `npm install`, copy `.env.example` to `.env`, then set `D
 - Product names and prices are rendered in bold; Server Boost multipliers and month count are formatted with separate backticks. The custom `alur` emoji (`<:alur:1558458209977499740>`) appears with one space before **Harga:**. The catalog heading uses `<:Catalog:1558470276981850132>`. 
 - Descriptions and reseller pricing are not shown.
 - Products come from the MongoDB `products` collection and only active products are displayed. Add or edit intended products in `/panel` with their correct category and price.
-- The category and product menus remain below the list. `PREV` and `NEXT` cycle through categories, with a counter such as `1/3`; the first category is displayed by default, and the arrows are disabled when there is only one category. The ticket-destination menu is removed. Selecting an active product updates the public catalog and opens a separate ephemeral order confirmation with `Ya, Lanjutkan` and `Batalkan`. Only `Ya, Lanjutkan` creates an order ticket; `Batalkan` deletes the private confirmation without creating a ticket. The support-ticket opening flow is intentionally not exposed in the catalog yet.
+- The category and product menus remain below the list. The shared base catalog stays unchanged: when a member chooses a category or presses `PREV/NEXT`, the bot creates or updates that member's **own public, non-ephemeral catalog panel** in the same channel. The panel reference is saved in MongoDB, so a later click or bot restart can reuse it. Only the panel owner can change its category; other members may see the panel but their clicks cannot change it. `PREV/NEXT` wrap around (`2/2` + `NEXT` → `1/2`; `1/2` + `PREV` → `2/2`) and are disabled when there is only one category. The ticket-destination menu is removed. Selecting an active product opens a separate ephemeral order confirmation with `Ya, Lanjutkan` and `Batalkan`. Only `Ya, Lanjutkan` creates an order ticket; `Batalkan` deletes the private confirmation without creating a ticket. The support-ticket opening flow is intentionally not exposed in the catalog yet.
 
 ## Tickets
 - Order channels use persistent sequential names such as `rap-1`, `rap-2`; support tickets have a separate reserved counter and naming scheme such as `support-0`, `support-1`. The support-ticket opening flow will be added separately and is not available from the catalog yet.
@@ -75,7 +77,7 @@ QRIS and bank details are not bundled in the repository. If the corresponding co
 - Payment-proof uploads are limited to five attachments and 15 MB total per message. Conditional MongoDB updates prevent payment/order controls from overwriting a proof already submitted.
 - Transcript generation is capped at 2,000 messages and 100 MB total attachment size. If a ticket exceeds either limit, archival stops and the original ticket channel is retained for manual review.
 - The built-in `Umum` category is protected in both the confirmation UI and the final deletion handler.
-- Startup runs `npm test` and `npm run check` before connecting the bot. Tests are automated unit/static checks and do not replace a live Discord/MongoDB integration test.
+- GitHub Actions runs `npm test` and `npm run check`; local `npm start` does not run them automatically. These are unit/static checks and do not replace a live Discord/MongoDB integration test.
 - The bot needs permission to manage channels and channel permission overwrites in the configured support category. For transcript archival/recovery, it also needs View Channel, Read Message History, Send Messages, and Attach Files in `TRANSCRIPT_CHANNEL_ID`.
 - Configure `FOUNDER_ROLE_ID` and `ADMIN_ROLE_ID` for the intended roles.
 - The bot uses the `GuildMessages` and privileged `MessageContent` intents to detect order-ticket attachments. Enable **Message Content Intent** in the Discord Developer Portal, or proof attachments may not be visible to the bot.

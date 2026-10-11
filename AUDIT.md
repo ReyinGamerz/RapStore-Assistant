@@ -2,7 +2,7 @@
 
 ## Status
 
-**PARTIALLY AUDITED — UNIT/SYNTAX CI PASS; LIVE INTEGRATION AND DEPENDENCY AUDIT REMAIN.**
+**PARTIALLY AUDITED — FOLLOW-UP PATCH CI PASS (PR #23, 2026-10-11); LIVE DISCORD/MONGODB TESTS AND DEPENDENCY/SECRET-HISTORY REVIEW STILL REMAIN.**
 
 - Repository: `ReyinGamerz/RapStore-Assistant`
 - Base branch/commit: `main` / `55b45b1c7487aa64112425cdc690e3b6f52151c7`
@@ -33,21 +33,22 @@ The audit branch fixes the confirmed runtime defects, shared catalog selection b
 
 | Path | Role | Status | Notes |
 |---|---|---|---|
-| `src/index.js` | Startup, interaction routing, panels, catalog, ticket creation/close, Discord events | REVIEWED — FIXED, CI PASS | Found undeclared `ObjectId` and a temporal-dead-zone bug in stale-ticket recovery; live interaction flows not tested |
-| `src/order-system.js` | Order/payment/vouch/transcript lifecycle and maintenance | REVIEWED — FIXED, CI PASS | Inspected authorization/state transitions; maintenance now stops and awaits an active run on shutdown; live lifecycle not tested |
+| `src/index.js` | Startup, interaction routing, panels, catalog, ticket creation/close, Discord events | UPDATED — CI PASS | Public base catalog now creates/updates one owner-bound non-ephemeral panel per user/channel; saved panels sync after catalog refresh/restart; live interactions remain untested |
+| `src/order-system.js` | Order/payment/vouch/transcript lifecycle and maintenance | UPDATED — CI PASS | Removed the extra `INFO PESANAN` message from order-ticket initialization; order/payment lifecycle still needs live verification |
 | `src/security.js` | Staff/owner checks, attachment validation, transcript limits, payment reconciliation, vouch deadline helper | REVIEWED — UPDATED | Deadline helper has boundary tests; production behavior not live-tested |
 | `src/ticket-recovery.js` | Missing-ticket state reconciliation | ADDED — CI PASS | Shared timestamp; injected database dependency for regression testing |
+| `src/catalog-state.js`, `test/catalog-state.test.js` | Category navigation wraparound | ADDED — CI PASS | Tests last-to-first NEXT, first-to-last PREV, one category, empty count, and invalid/stale indexes |
 | `src/config.js` | Environment configuration | REVIEWED — UPDATED | Removed obsolete guild ID setting |
-| `src/database.js` | MongoDB connection and indexes | REVIEWED | Actual Atlas data/index compatibility is unavailable |
+| `src/database.js` | MongoDB connection and indexes | UPDATED — CI PASS | Added a unique `{guildId, channelId, userId}` index for public per-user catalog panel references; actual Atlas index state has not been inspected |
 | `src/commands.js` | Slash command definitions | REVIEWED | Defines `/catalog` and `/panel` |
 | `src/global-commands.js` | Command deployment | REVIEWED — FIXED, CI PASS; LIVE DISCORD BLOCKED | Global registration plus cleanup of legacy guild registrations |
 | `src/deploy-commands.js` | Manual command refresh | REVIEWED — FIXED, CI PASS; LIVE DISCORD BLOCKED | Enumerates current guilds and destroys the temporary client in `finally` |
 | `src/ui.js` | Components V2 UI builders/text splitting | REVIEWED | No live Discord visual test |
 | `test/security.test.js` | Security helper unit tests | REVIEWED — PASS CI | Includes vouch deadline boundary tests; latest CI run [#38048815221](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38048815221) passed |
 | `test/ticket-recovery.test.js` | Missing-channel recovery regression tests | ADDED — PASS CI | Tests shared timestamp and invalid identifiers |
-| `package.json` | Runtime/dependencies/npm scripts | REVIEWED — CI PASS | Added `prestart` and `validate`; syntax check includes new module |
+| `package.json` | Runtime/dependencies/npm scripts | UPDATED — CI PASS | `npm start` directly runs `node src/index.js`; tests/checks remain manual commands, and syntax checks include `src/catalog-state.js` |
 | `.github/workflows/ci.yml` | GitHub Actions | REVIEWED — PASS | Explicit `contents: read` workflow token permission and production dependency advisory check; latest run [#38048815221](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38048815221) passed |
-| `README.md` | Setup/operation guide | REVIEWED — UPDATED | Aligned with global commands and automatic validation |
+| `README.md` | Setup/operation guide | UPDATED — CI PASS | Documents direct `npm start`, manual test/check commands, and public non-ephemeral owner-bound catalog panels |
 | `AUDIT.md` | Audit log/report | REVIEWED — UPDATED | Records scope, findings, remediation, CI evidence, and residual risks |
 | `.env.example` | Environment template | REVIEWED — UPDATED | Removed `DISCORD_GUILD_ID` |
 | `.gitignore` | Local secret/runtime exclusions | REVIEWED | Ignores `.env` and `.env.*`, with `.env.example` explicitly allowed |
@@ -60,10 +61,7 @@ A recursive GitHub tree listing of `main` was retrieved: 16 tracked files were p
 
 ```text
 npm start
-  -> prestart: npm run validate
-       -> node --test
-       -> npm run check (Node syntax checks)
-  -> src/index.js
+  -> src/index.js (direct startup; tests/syntax checks run by CI or manually)
        -> environment validation
        -> MongoDB connection + indexes
        -> category data normalization
@@ -73,9 +71,10 @@ npm start
             -> overwrite global command set
             -> clear old guild-scoped commands in enumerable guilds
 
-/catalog -> Founder/Admin handler check -> public persistent catalog
+/catalog -> Founder/Admin handler check -> public persistent base catalog
 /panel   -> Founder/Admin handler check -> ephemeral management panel
-public catalog select -> private per-user catalog copy -> validate category/product/intent -> reserve user ticket -> create channel + DB record
+shared catalog select -> create/update owner-bound public non-ephemeral per-user panel
+per-user panel -> owner check -> category/product selection -> ephemeral product confirmation -> reserve ticket -> create channel + DB record
 order ticket -> order record -> payment selection -> proof submission -> staff review
              -> DONE -> vouch -> transcript archive -> ticket channel deletion
 ticket close -> owner/staff check -> lifecycle guard -> transcript archive -> channel deletion
@@ -90,11 +89,11 @@ Command definitions live in `src/commands.js`. The event router is in `src/index
 | AUD-001 | P1 | High | `src/index.js` stale-ticket cleanup | `missingAt` was read before initialization; recovery could crash ticket creation when an old channel was missing | FIXED — REGRESSION TEST PASS; LIVE FLOW NOT RUN |
 | AUD-002 | P2 | High | `src/index.js` panel category/product handlers | `ObjectId` was referenced without a module-scope import; edit/delete confirmation paths could throw at runtime | FIXED — CI PASS; LIVE FLOW NOT RUN |
 | AUD-003 | P2 | High | `src/global-commands.js`, `src/deploy-commands.js`, `src/config.js`, `.env.example`, README | Runtime and docs were guild-scoped and required `DISCORD_GUILD_ID`, contrary to global-only requirement | FIXED — CI PASS; LIVE DISCORD BLOCKED |
-| AUD-004 | P2 | High | `package.json` | `npm start` did not automatically run unit tests and syntax checks | FIXED — CI PASS |
+| AUD-004 | P2 | High | `package.json` | Startup does not automatically run unit tests and syntax checks | INTENTIONAL CHANGE AFTER AUDIT: operator requested direct `npm start`; CI still runs tests/checks and deploy docs recommend manual validation |
 | AUD-005 | P2 | High | `package-lock.json` | No lockfile, so dependency resolution is not reproducible and transitive versions are not pinned | OPEN — registry/network needed |
 | AUD-006 | P2 | High | Test coverage | Existing tests are primarily pure helper tests; full Discord/MongoDB end-to-end tests are not present in the inspected inventory | OPEN — integration environment needed |
 | AUD-007 | P2 | Medium | MongoDB index initialization | Unique-index creation may fail on production data containing duplicates or incompatible legacy records | BLOCKED — inspect metadata/backup before migration |
-| AUD-008 | P2 | High | Public persistent catalog | Category/product selection edited the shared public message; users could interfere with each other's selection state | FIXED — PENDING LIVE E2E; each user now gets a private catalog copy on first selection |
+| AUD-008 | P2 | High | Public persistent catalog | Category/product selection edited the shared public message; users could interfere with each other's selection state | UPDATED IN CODE — public non-ephemeral panel per user/channel, owner-bound components and persisted message ID; live E2E pending |
 | AUD-009 | P2 | High | `src/order-system.js`, `src/index.js` shutdown | Maintenance interval was never cleared and an active run was not awaited before MongoDB closed | FIXED — CI PASS; LIVE SHUTDOWN TEST NOT RUN |
 | AUD-010 | P2 | Medium | Dependencies / CI | No committed lockfile means dependency resolution is not reproducible; CI does run the production dependency audit | PARTIALLY MITIGATED — `npm audit --omit=dev --audit-level=high` PASS in CI; reproducibility remains OPEN |
 | AUD-011 | P2 | Medium | `src/order-system.js` vouch modal submit | Vouch deadline was checked on modal open but not rechecked on submit; a late submission could be accepted | FIXED — REGRESSION TEST PASS CI; LIVE FLOW NOT RUN |
@@ -125,14 +124,14 @@ Role IDs, channel overwrites, and bot permissions still require live-server veri
 1. Extracted missing-ticket reconciliation into `src/ticket-recovery.js`. The timestamp is created before writes and shared across ticket/order/proof updates.
 2. Imported `ObjectId` in `src/index.js` so panel category/product handlers can use it.
 3. Added `test/ticket-recovery.test.js` for missing-channel recovery and invalid identifiers.
-4. Changed catalog category/product selection to a per-user ephemeral copy, leaving the public catalog unchanged.
+4. Changed catalog navigation to create/update one public non-ephemeral panel per user and channel. Component IDs carry the owner ID, and handlers reject another user's clicks without changing the panel.
 5. Rechecked the vouch deadline at modal submission, added boundary tests, and escaped user-controlled testimonial Markdown.
 6. Changed previously silent audit-log insert failures to write a sanitized error message to the process log.
 7. Removed unused `LOG_LEVEL`, the unused `v2SendPayload` helper, and the unused `ticketNumber` initializer argument; limited the CI token to `contents: read`.
 8. Added a stop function for order maintenance; shutdown clears the interval and waits for the active maintenance run before closing MongoDB.
 9. Migrated slash-command deployment to global registration; attempts to remove legacy guild-scoped copies only in guilds the bot currently enumerates. Cleanup errors are surfaced instead of reporting success.
 10. Removed `DISCORD_GUILD_ID` from runtime config and the example environment.
-11. Added `npm run validate` and `prestart` so each `npm start` runs unit and syntax checks first.
+11. Kept `npm test`, `npm run check`, and `npm run validate` available as manual validation commands; current `npm start` directly executes the bot entry point.
 12. Updated README instructions to match the actual deployment flow.
 
 No production Discord server, MongoDB database, or VPS was modified.
@@ -141,9 +140,10 @@ No production Discord server, MongoDB database, or VPS was modified.
 
 | Test | Type | Result | Evidence/notes |
 |---|---|---|---|
-| Existing `test/security.test.js` | Unit | PASS | Unit tests passed in latest source validation run [#38048874980](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38048874980) |
-| New `test/ticket-recovery.test.js` | Regression unit | PASS | Added on audit branch and passed in latest source validation run [#38048874980](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38048874980) |
-| `npm run check` | Syntax | PASS | All configured `node --check` commands passed in latest source validation run [#38048874980](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38048874980) |
+| Existing `test/security.test.js` | Unit | PASS | Latest follow-up CI [#38128458526](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38128458526) passed |
+| New `test/ticket-recovery.test.js` | Regression unit | PASS | Latest follow-up CI [#38128458526](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38128458526) passed |
+| New `test/catalog-state.test.js` | Regression unit | PASS | Latest follow-up CI [#38128458526](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38128458526) passed wrap-around and invalid/stale-index tests |
+| `npm run check` | Syntax | PASS | All configured `node --check` commands passed in follow-up CI [#38128458526](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38128458526) |
 | Maintenance shutdown | Static review | PASS (code review) | Timer clear and active-run wait are wired; no live shutdown test |
 | Vouch deadline | Unit regression | PASS | Boundary tests for before/at/after deadline and invalid dates passed in [CI run #38048815221](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38048815221) |
 | Global command refresh | Discord integration | BLOCKED | Requires real bot token and Discord API |
@@ -153,12 +153,12 @@ No production Discord server, MongoDB database, or VPS was modified.
 
 ## H. Residual risks
 
-- Latest verified source CI run [#38048874980](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38048874980) passed `npm install --ignore-scripts`, production dependency advisory check (`npm audit --omit=dev --audit-level=high`), unit tests, and configured syntax checks. This threshold check passing means no production dependency advisory at High or Critical severity blocked CI; it is not a full security guarantee. Live behavior and exhaustive security-history checks remain unverified.
+- Latest verified follow-up CI run [#38128458526](https://github.com/ReyinGamerz/RapStore-Assistant/actions/runs/38128458526) passed `npm install --ignore-scripts`, production dependency advisory check (`npm audit --omit=dev --audit-level=high`), unit tests, and configured syntax checks. This threshold check passing means no production dependency advisory at High or Critical severity blocked CI; it is not a full security guarantee. Live behavior and exhaustive security-history checks remain unverified.
 - No package lockfile exists. Dependency versions are not fully reproducible until a lockfile is generated and committed in an environment with registry access.
 - Production dependency advisories were checked at High/Critical threshold in CI; development dependency advisories and exhaustive secret scanning of commit history remain unverified.
 - Global command propagation can take time. Legacy guild command cleanup only covers guilds the bot can currently enumerate.
 - Discord role/channel permissions, Components V2 payloads, transcript uploads, and MongoDB concurrency need controlled live tests.
-- The per-user catalog flow needs a live Discord smoke test to verify the public message remains unchanged and ephemeral interactions update only the invoking user's private copy.
+- The new catalog flow needs a live Discord smoke test to verify the shared base message stays unchanged, each owner-bound public panel keeps independent category state, and other users cannot edit another member's panel. These panels are visible to everyone in the channel by design; only interaction control is owner-bound.
 - Production database documents and indexes were not inspected. Do not run destructive migrations or drop indexes without backup and approval.
 
 ## I. VPS update instructions
@@ -169,10 +169,12 @@ After reviewing and merging the PR:
 cd ~/RapStore-Assistant
 git pull
 npm install
+npm test
+npm run check
 npm start
 ```
 
-`npm start` runs `npm run validate` automatically. If validation fails, the bot should not start. To refresh global slash commands manually without starting the full bot:
+`npm start` directly runs `node src/index.js`; run tests and syntax checks manually before deployment. To refresh global slash commands manually without starting the full bot:
 
 ```bash
 npm run commands:refresh
@@ -182,6 +184,6 @@ Never share `.env`, tokens, MongoDB URI, payment credentials, or private logs. A
 
 ## J. Conclusion
 
-Current status: **PARTIALLY AUDITED — WITH FINDINGS; CI PASS, LIVE INTEGRATION AND DEPENDENCY REPRODUCIBILITY/SECRET-HISTORY REVIEW REMAIN.**
+Current status: **PARTIALLY AUDITED — FOLLOW-UP PATCH CI PASS; LIVE INTEGRATION AND DEPENDENCY REPRODUCIBILITY/SECRET-HISTORY REVIEW REMAIN.**
 
 This report does not claim 100% safety, full E2E coverage, or production verification. Upgrade the status only after CI results are checked and remaining inventory/integration limitations are addressed.

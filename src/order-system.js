@@ -1549,10 +1549,6 @@ export async function initializeOrderTicket({ channel, interaction, ticketId, ti
     details: { orderId: String(result.insertedId), orderCode, channelId: channel.id, ticketId: String(ticketId) },
     createdAt: new Date(),
   }).catch(error => console.error("[audit-log-write]", error?.message || error));
-  await channel.send(v2(buildPanel(
-    "INFO PESANAN",
-    "Pilih kategori, produk, dan jumlah pada panel PESANAN. Setelah totalnya benar, pilih QRIS atau BANK. Jangan pernah mengirim password atau kode OTP.",
-  )));
   return order;
 }
 export { allocateTicketNumber };
