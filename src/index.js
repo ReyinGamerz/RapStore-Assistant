@@ -929,6 +929,186 @@ async function handleCatalogPageButton(interaction) {
   await persistCatalogSelection(interaction, category, "");
 }
 
+async function createCatalogOrderTicket(interaction, selectedProductId) {
+  const db = getDatabase();
+  if (!ObjectId.isValid(selectedProductId)) {
+    await interaction.editReply(v2Payload({
+      content: "Produk tidak valid atau sudah tidak tersedia. Buka katalog dan pilih produk lagi.",
+      flags: EPHEMERAL | MessageFlags.IsComponentsV2,
+    }));
+    return;
+  }
+  const selectedProduct = await db.collection("products").findOne({ _id: new ObjectId(selectedProductId), active: true });
+  if (!selectedProduct) {
+    await interaction.editReply(v2Payload({
+      content: "Produk sudah tidak tersedia. Buka katalog lalu pilih produk aktif lagi.",
+      flags: EPHEMERAL | MessageFlags.IsComponentsV2,
+    }));
+    return;
+  }
+    const reservations = db.collection("ticket_reservations");
+    const reservationTime = new Date();
+    await reservations.deleteMany({ createdAt: { $lt: new Date(Date.now() - 10 * 60 * 1000) } });
+    try {
+      await reservations.insertOne({ guildId: interaction.guildId, buyerId: interaction.user.id, interactionId: interaction.id, createdAt: reservationTime });
+    } catch (error) {
+      if (error?.code === 11000) {
+        await interaction.editReply(v2Payload({
+          content: "Permintaan tiket lu sedang diproses. Tunggu sebentar lalu cek daftar tiket sebelum mencoba lagi.",
+          flags: EPHEMERAL | MessageFlags.IsComponentsV2,
+        }));
+        return;
+      }
+      throw error;
+    }
+    let progressMessage = interaction.message || null;
+    const reportProgress = async (title, body) => {
+      const payload = { flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral, components: [buildPanel(title, body)] };
+      if (progressMessage) await interaction.editReply(payload);
+      else progressMessage = await interaction.followUp({ ...payload, fetchReply: true });
+    };
+    try {
+      await reportProgress("TIKET SEDANG DIBUAT", "Permintaan lu sedang diproses. Tunggu sebentar ya — jangan tekan tombol konfirmasi berulang kali.");
+      const activeTickets = await db.collection("tickets").find({ guildId: interaction.guildId, buyerId: interaction.user.id, status: "open" }).toArray();
+      let existing = null;
+      for (const activeTicket of activeTickets) {
+        let liveChannel;
+        try { liveChannel = await interaction.guild.channels.fetch(activeTicket.channelId); }
+        catch (error) { if (Number(error?.code) === 10003) liveChannel = null; else throw error; }
+        if (liveChannel) { existing ||= activeTicket; continue; }
+        await reconcileMissingTicket({
+          db,
+          guildId: interaction.guildId,
+          activeTicket,
+          actorId: interaction.user.id,
+        });
+      }
+      if (existing) {
+        await reportProgress("TIKET SUDAH ADA", "Lu sudah punya tiket yang masih terbuka: <#" + existing.channelId + ">. Selesaikan tiket itu sebelum membuat tiket baru.");
+        return;
+      }
+      const ticketType = "order_now";
+      const ticketNumber = await allocateTicketNumber("order");
+      const ticketCode = await allocateTicketCode();
+      const channel = await interaction.guild.channels.create({
+        name: ticketNumber.channelName, type: ChannelType.GuildText, parent: config.ids.supportCategory || undefined,
+        topic: "RapStore " + ticketType + "; ticket " + ticketCode + "; buyer " + interaction.user.id,
+        permissionOverwrites: [
+          { id: interaction.guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+          { id: interaction.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles] },
+          { id: config.ids.founderRole, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+          { id: config.ids.adminRole, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+          { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels] },
+        ],
+      });
+      try {
+        const ticketInsert = await db.collection("tickets").insertOne({
+          guildId: interaction.guildId, buyerId: interaction.user.id, channelId: channel.id, type: ticketType,
+          ticketNumber: ticketNumber.number, ticketPrefix: "rap", ticketCode,
+          productId: selectedProduct ? String(selectedProduct._id) : null, productName: selectedProduct ? safeText(selectedProduct.name, 100) : null,
+          status: "open", createdAt: new Date(),
+        });
+        await initializeOrderTicket({ channel, interaction, ticketId: ticketInsert.insertedId, ticketCode, selectedProduct });
+      } catch (error) {
+        await db.collection("tickets").deleteOne({ channelId: channel.id }).catch(error => logError("ticket-create-rollback", error));
+        await db.collection("orders").deleteMany({ channelId: channel.id, status: "ON HOLD" })
+          .catch(error => logError("ticket-create-order-rollback", error));
+        await channel.delete("Failed to initialize catalog ticket")
+          .catch(error => logError("ticket-create-channel-rollback", error));
+        throw error;
+      }
+      await reportProgress("TIKET BERHASIL DIBUAT", "✓ Tiket lu sudah siap: <#" + channel.id + ">.");
+    } catch (error) {
+      logError("ticket-create", error);
+      await reportProgress("TIKET GAGAL DIBUAT", "Bot belum berhasil membuat tiket. Coba lagi beberapa saat; jika berulang, hubungi Founder/Admin.").catch(() => {});
+    } finally {
+      await reservations.deleteOne({ guildId: interaction.guildId, buyerId: interaction.user.id, interactionId: interaction.id }).catch(error => logError("ticket-reservation-release", error));
+    }
+}
+
+
+function formatPrice(value) {
+  return "Rp " + Number(value || 0).toLocaleString("id-ID");
+}
+
+async function handleTicketButton(interaction) {
+  if (!interaction.inGuild() || !interaction.channel || interaction.channel.type !== ChannelType.GuildText) {
+    await interaction.reply(v2Payload({content:"Tombol tiket hanya bisa digunakan di channel tiket server.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
+    return;
+  }
+  const db = getDatabase();
+  const ticket = await db.collection("tickets").findOne({guildId:interaction.guildId,channelId:interaction.channelId,status:"open"});
+  if (!ticket) {
+    await interaction.reply(v2Payload({content:"Data tiket tidak ditemukan atau tiket sudah ditutup.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
+    return;
+  }
+  const staff = hasStaffRole(interaction.member);
+  if (!canAccessTicket(ticket, interaction.user.id, staff)) {
+    await interaction.reply(v2Payload({content:"Hanya pembuat tiket atau Founder/Admin yang dapat menutup tiket ini.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
+    return;
+  }
+  const getOrderCloseBlock = async () => {
+    const order = await db.collection("orders").findOne({
+      guildId: interaction.guildId,
+      channelId: interaction.channelId,
+    });
+    if (canManuallyCloseTicket(order)) return "";
+    if (order.status === "ON HOLD") {
+      return "Pesanan masih **ON HOLD**. Batalkan pesanan melalui tombol **Batalkan Pesanan** terlebih dahulu; tiket tidak akan dihapus selama pesanan masih aktif.";
+    }
+    if (order.status === "PROSES") {
+      return "Pesanan sedang **PROSES**. Selesaikan dengan **Tandai DONE** setelah pekerjaan selesai. Jika benar-benar harus membatalkan, Founder/Admin dapat menggunakan **!close** untuk membatalkan dan mengarsipkan pesanan secara eksplisit.";
+    }
+    if (order.status === "DONE") {
+      return "Pesanan sudah **DONE**. Gunakan tombol **VOUCH** atau tunggu proses vouch otomatis; tiket tidak boleh dihapus sebelum alur vouch dan transcript selesai.";
+    }
+    return "Status pesanan belum aman untuk menutup tiket. Periksa pesanan bersama Founder/Admin.";
+  };
+  if (interaction.customId === "rapstore:ticket:close") {
+    const closeBlock = await getOrderCloseBlock();
+    if (closeBlock) {
+      await interaction.reply(v2Payload({content:closeBlock,flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
+      return;
+    }
+    const confirm = buildPanel("KONFIRMASI TUTUP TIKET","Yakin ingin menutup tiket ini? Channel akan dikunci dan ditandai sebagai selesai.");
+    confirm.addActionRowComponents(new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId("rapstore:ticket:confirmclose").setLabel("Ya, Tutup Tiket").setStyle(ButtonStyle.Danger),
+      new ButtonBuilder().setCustomId("rapstore:ticket:cancelclose").setLabel("Batal").setStyle(ButtonStyle.Secondary)
+    ));
+    await interaction.reply({flags:MessageFlags.IsComponentsV2|MessageFlags.Ephemeral,components:[confirm]});
+    return;
+  }
+  if (interaction.customId === "rapstore:ticket:cancelclose") {
+    await interaction.deferUpdate();
+    await interaction.deleteReply();
+    return;
+  }
+  if (interaction.customId === "rapstore:ticket:confirmclose") {
+    await interaction.deferUpdate();
+    const freshTicket = await db.collection("tickets").findOne({guildId:interaction.guildId,channelId:interaction.channelId,status:"open"});
+    if (!freshTicket) {
+      await interaction.editReply(v2Payload({content:"Tiket sudah ditutup sebelumnya.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
+      return;
+    }
+    const closeBlock = await getOrderCloseBlock();
+    if (closeBlock) {
+      await interaction.editReply(v2Payload({content:closeBlock,flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
+      return;
+    }
+    try {
+      await archiveAndDeleteTicket({
+        channel: interaction.channel, ticket: freshTicket, client,
+        closedBy: interaction.user.id, reason: "manual_ticket_close",
+      });
+      await interaction.followUp(v2Payload({content:"Tiket ditutup. Transcript HTML sudah disimpan dan channel tiket dihapus.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
+      await audit("ticket.closed",interaction,{ticketId:String(freshTicket._id),channelId:interaction.channelId,buyerId:freshTicket.buyerId});
+    } catch (error) {
+      logError("ticket-archive-delete", error);
+      await interaction.followUp(v2Payload({content:"Tiket belum dihapus karena transcript gagal disimpan. Pastikan TRANSCRIPT_CHANNEL_ID sudah benar dan bot punya izin mengirim file serta menghapus channel.",flags:EPHEMERAL|MessageFlags.IsComponentsV2}));
+    }
+  }
+}
+
 async function handleCatalogOrderButton(interaction) {
   if (!interaction.inGuild()) {
     await interaction.reply(v2Payload({
