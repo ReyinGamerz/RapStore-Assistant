@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 
 const source = readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
 const orderSource = readFileSync(new URL("../src/order-system.js", import.meta.url), "utf8");
+const catalogStateSource = readFileSync(new URL("../src/catalog-state.js", import.meta.url), "utf8");
 const catalogStart = source.indexOf("async function handleCatalogSelection(interaction)");
 const catalogEnd = source.indexOf("\nfunction formatPrice(", catalogStart);
 assert.notEqual(catalogStart, -1, "catalog selection handler should exist");
@@ -53,7 +54,7 @@ test("catalog category navigation displays a page counter and cycles categories"
   assert.match(source, /\.setCustomId\("rapstore:catalog:category-page:next:"/);
   assert.match(source, /\.setLabel\(pageLabel\)/);
   assert.match(source, /async function handleCatalogPageButton\(interaction\)[\s\S]*?wrapCategoryIndex\(currentIndex, action, categories\.length\)/);
-  assert.match(source, /function wrapCategoryIndex\(currentIndex, direction, categoryCount\)/);
+  assert.match(catalogStateSource, /function wrapCategoryIndex\(currentIndex, direction, categoryCount\)/);
   assert.match(source, /await handleCatalogPageButton\(interaction\); return;/);
 });
 
