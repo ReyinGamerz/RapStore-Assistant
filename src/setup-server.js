@@ -1,35 +1,74 @@
 import { ChannelType, PermissionFlagsBits } from "discord.js";
 
 const ROLE_NAMES = ["Founder", "Admin", "Rap-Bot", "Staff", "Helper", "Reseller", "Booster", "Customer", "Visitor"];
+const P = PermissionFlagsBits;
 
 const LAYOUT = [
-  { name: "━━ WELCOME ━━", channels: [
-    { name: "👋・welcome", type: ChannelType.GuildText, access: "public", send: false },
-    { name: "📜・rules", type: ChannelType.GuildText, access: "public", send: false },
-    { name: "📢・announcement", type: ChannelType.GuildText, access: "staff", send: false, sendAccess: "admins" },
+  { name: "━━ WELCOME ━━", visibility: "public", channels: [
+    { label: "👋：ᴡᴇʟᴄᴏᴍᴇ", name: "welcome", access: "public", send: [] },
+    { label: "📜：ʀᴜʟᴇs", name: "rules", access: "public", send: [] },
+    { label: "📢：sᴄᴀᴍᴍᴇʀ", name: "scammer", access: "public", send: [] },
+    { label: "📣：ᴀɴɴᴏᴜɴᴄᴇᴍᴇɴᴛ", name: "announcement", access: "public", send: ["Founder", "Admin", "Rap-Bot"] },
   ]},
-  { name: "━━ STORE ━━", channels: [
-    { name: "🛒・catalog", type: ChannelType.GuildText, access: "public", send: false },
-    { name: "🏷️・promo", type: ChannelType.GuildText, access: "staff", send: false },
-    { name: "🧾・tos-xid", type: ChannelType.GuildText, access: "public", send: false },
-    { name: "🎫・ticket-order", type: ChannelType.GuildText, access: "customer", send: true },
-    { name: "📦・order-log", type: ChannelType.GuildText, access: "staff", send: false },
+  { name: "━━ STORE ━━", visibility: "public", channels: [
+    { label: "🛒：ᴄᴀᴛᴀʟᴏɢ", name: "catalog", access: "public", send: [] },
+    { label: "📜：ᴛᴏs-xɪᴅ", name: "tos-xid", access: "public", send: [] },
+    { label: "🏷️：ᴘʀᴏᴍᴏ", name: "promo", access: "public", send: ["Founder", "Admin", "Rap-Bot"] },
+    { label: "📢：ᴀᴜᴛᴏᴘᴏsᴛ", name: "autopost", access: "public", send: ["Founder", "Admin", "Rap-Bot"] },
+    { label: "🛒：ᴛɪᴄᴋᴇᴛ-ᴏʀᴅᴇʀ", name: "ticket-order", access: "public", send: ["Founder", "Admin", "Rap-Bot", "Staff", "Helper", "Reseller", "Customer"] },
+    { label: "📦：ᴏʀᴅᴇʀ-ʟᴏɢ", name: "order-log", access: "staff", send: [] },
   ]},
-  { name: "━━ COMMUNITY ━━", channels: [
-    { name: "⭐・vouch", type: ChannelType.GuildText, access: "public", send: true },
-    { name: "🏆・top-buyer", type: ChannelType.GuildText, access: "staff", send: false },
-    { name: "💬・chat", type: ChannelType.GuildText, access: "public", send: true },
-    { name: "🤖・bot-command", type: ChannelType.GuildText, access: "public", send: true },
+  { name: "━━ COMMUNITY ━━", visibility: "public", channels: [
+    { label: "⭐：ᴠᴏᴜᴄʜ", name: "vouch", access: "public", send: ["Founder", "Admin", "Rap-Bot"] },
+    { label: "⭐：ʀᴇᴘᴜᴛᴀsɪ", name: "reputasi", access: "public", send: [] },
+    { label: "👑：ᴛᴏᴘ-ʙᴜʏᴇʀ", name: "top-buyer", access: "public", send: [] },
+    { label: "🤖：ʙᴏᴛ-ᴄᴏᴍᴍᴀɴᴅ", name: "bot-command", access: "public", send: ["Founder", "Admin", "Rap-Bot", "Staff", "Helper", "Reseller", "Booster", "Customer", "Visitor"] },
+    { label: "💭：ᴄʜᴀᴛ", name: "chat", access: "public", send: ["Founder", "Admin", "Rap-Bot", "Staff", "Helper", "Reseller", "Booster", "Customer", "Visitor"] },
   ]},
-  { name: "━━ STAFF ZONE ━━", channels: [
-    { name: "🛡️・staff-chat", type: ChannelType.GuildText, access: "staff", send: true },
-    { name: "📋・staff-log", type: ChannelType.GuildText, access: "staff", send: false },
-    { name: "⚙️・bot-config", type: ChannelType.GuildText, access: "admins", send: true },
+  { name: "━━ RESELLER ━━", visibility: "reseller", channels: [
+    { label: "💬：ʀᴇsᴇʟʟᴇʀ-ᴄʜᴀᴛ", name: "reseller-chat", access: "reseller", send: ["Reseller", "Founder", "Admin", "Rap-Bot"] },
+    { label: "📦：ᴅᴀғᴛᴀʀ-ᴘʀᴏᴅᴜᴋ", name: "daftar-produk", access: "reseller", send: [] },
+  ]},
+  { name: "━━ STAFF / ADMIN ZONE ━━", visibility: "staff", channels: [
+    { label: "💬：sᴛᴀғғ-ᴄʜᴀᴛ", name: "staff-chat", access: "staff", send: ["Founder", "Admin", "Rap-Bot", "Staff", "Helper"] },
+    { label: "📋：sᴛᴀғғ-ʟᴏɢ", name: "staff-log", access: "staff", send: [] },
+    { label: "⚙️：ʙᴏᴛ-ᴄᴏɴғɪɢ", name: "bot-config", access: "staff", send: ["Founder", "Admin", "Rap-Bot"] },
   ]},
 ];
 
+function makeRoleOverwrites(guild, roleMap, visibleNames, sendNames) {
+  const overwrites = [{
+    id: guild.roles.everyone.id,
+    deny: [
+      P.ViewChannel, P.SendMessages, P.AddReactions,
+      P.CreatePublicThreads, P.CreatePrivateThreads, P.SendMessagesInThreads,
+    ],
+  }];
+  for (const name of ROLE_NAMES) {
+    const role = roleMap.get(name);
+    const canView = visibleNames.includes(name);
+    const canSend = canView && sendNames.includes(name);
+    overwrites.push({
+      id: role.id,
+      allow: [
+        ...(canView ? [P.ViewChannel, P.ReadMessageHistory] : []),
+        ...(canSend ? [P.SendMessages, P.SendMessagesInThreads, P.AddReactions, P.EmbedLinks, P.AttachFiles] : []),
+        ...(name === "Booster" ? [P.ChangeNickname] : []),
+        ...(name === "Admin" ? [P.ManageMessages, P.ModerateMembers, P.KickMembers, P.BanMembers] : []),
+        ...(name === "Staff" ? [P.ManageMessages, P.ModerateMembers] : []),
+        ...(name === "Helper" ? [P.ReadMessageHistory] : []),
+      ],
+      deny: [
+        ...(!canView ? [P.ViewChannel] : []),
+        ...(!canSend ? [P.SendMessages, P.SendMessagesInThreads, P.AddReactions, P.CreatePublicThreads, P.CreatePrivateThreads] : []),
+      ],
+    });
+  }
+  return overwrites;
+}
+
 export async function setupServer(guild) {
-  if (!guild.members.me?.permissions.has(PermissionFlagsBits.ManageChannels)) {
+  if (!guild.members.me?.permissions.has(P.ManageChannels)) {
     throw new Error("Bot perlu izin Manage Channels untuk membuat channel dan mengatur permission.");
   }
 
@@ -46,64 +85,47 @@ export async function setupServer(guild) {
 
   const allChannels = await guild.channels.fetch();
   const deletable = [...allChannels.values()].filter(Boolean);
-  // This command is explicitly destructive and only runs after the caller confirms.
+  // /setupserver is destructive by design and must only be run on the test server.
   for (const channel of deletable) await channel.delete("Rebuild server layout via confirmed /setupserver");
 
-  const everyone = guild.roles.everyone;
-  const publicRoles = ["Founder", "Admin", "Rap-Bot", "Staff", "Helper", "Reseller", "Booster", "Customer", "Visitor"];
-  const staffRoles = ["Founder", "Admin", "Rap-Bot", "Staff", "Helper"];
-  const adminRoles = ["Founder", "Admin", "Rap-Bot"];
+  const staffNames = ["Founder", "Admin", "Rap-Bot", "Staff", "Helper"];
+  const adminNames = ["Founder", "Admin", "Rap-Bot"];
+  const resellerNames = ["Founder", "Admin", "Rap-Bot", "Reseller"];
   const created = [];
 
   for (const section of LAYOUT) {
-    const categoryAllowed = section.name.includes("STAFF") ? staffRoles : publicRoles;
-    const categoryOverwrites = [
-      { id: everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
-      ...publicRoles.map(name => ({
-        id: roleMap.get(name).id,
-        allow: categoryAllowed.includes(name) ? [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory] : [],
-        deny: categoryAllowed.includes(name) ? [] : [PermissionFlagsBits.ViewChannel],
-      })),
-    ];
-    const category = await guild.channels.create({ name: section.name, type: ChannelType.GuildCategory, permissionOverwrites: categoryOverwrites, reason: "/setupserver layout" });
+    const visibleNames = section.visibility === "staff" ? staffNames
+      : section.visibility === "reseller" ? resellerNames
+      : ROLE_NAMES;
+    const category = await guild.channels.create({
+      name: section.name,
+      type: ChannelType.GuildCategory,
+      permissionOverwrites: makeRoleOverwrites(guild, roleMap, visibleNames, []),
+      reason: "/setupserver layout and strict role permissions",
+    });
     created.push(category.name);
-    for (const [channelIndex, spec] of section.channels.entries()) {
-      let allowedNames;
-      if (spec.access === "public") allowedNames = publicRoles;
-      else if (spec.access === "staff") allowedNames = staffRoles;
-      else if (spec.access === "admins") allowedNames = adminRoles;
-      else if (spec.access === "customer") allowedNames = ["Founder", "Admin", "Rap-Bot", "Staff", "Helper", "Reseller", "Customer"];
-      else allowedNames = [];
-      const sendNames = spec.sendAccess === "admins"
-        ? adminRoles
-        : spec.sendAccess === "staff"
-          ? staffRoles
-          : spec.send
-            ? allowedNames
-            : [];
-      const overwrites = [
-        { id: everyone.id, deny: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.AddReactions, PermissionFlagsBits.CreatePublicThreads, PermissionFlagsBits.CreatePrivateThreads, PermissionFlagsBits.SendMessagesInThreads] },
-        ...publicRoles.map(name => {
-          const canView = allowedNames.includes(name);
-          const canSend = sendNames.includes(name);
-          return {
-            id: roleMap.get(name).id,
-            allow: [
-              ...(canView ? [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory] : []),
-              ...(canSend ? [PermissionFlagsBits.SendMessages, PermissionFlagsBits.AddReactions, PermissionFlagsBits.SendMessagesInThreads] : []),
-            ],
-            deny: [
-              ...(!canView ? [PermissionFlagsBits.ViewChannel] : []),
-              ...(!canSend ? [PermissionFlagsBits.SendMessages, PermissionFlagsBits.AddReactions, PermissionFlagsBits.CreatePublicThreads, PermissionFlagsBits.CreatePrivateThreads, PermissionFlagsBits.SendMessagesInThreads] : []),
-            ],
-          };
-        }),
-      ];
-      const treePrefix = channelIndex === 0 ? "╭" : channelIndex === section.channels.length - 1 ? "╰" : "┊";
-      const channelName = treePrefix + "・" + spec.name.replace("・", "：");
-      await guild.channels.create({ name: channelName, type: spec.type, parent: category.id, permissionOverwrites: overwrites, reason: "/setupserver layout" });
+
+    for (const [i, spec] of section.channels.entries()) {
+      const channelVisible = spec.access === "staff" ? staffNames
+        : spec.access === "reseller" ? resellerNames
+        : ROLE_NAMES;
+      const overwrites = makeRoleOverwrites(guild, roleMap, channelVisible, spec.send);
+      const prefix = i === 0 ? "╭" : i === section.channels.length - 1 ? "╰" : "┊";
+      const channelName = prefix + "・" + spec.label;
+      await guild.channels.create({
+        name: channelName,
+        type: ChannelType.GuildText,
+        parent: category.id,
+        permissionOverwrites: overwrites,
+        reason: "/setupserver layout and strict role permissions",
+      });
       created.push(channelName);
     }
   }
-  return { roles: ROLE_NAMES.length, channels: created.length - LAYOUT.length, categories: LAYOUT.length };
+
+  return {
+    roles: ROLE_NAMES.length,
+    categories: LAYOUT.length,
+    channels: created.length - LAYOUT.length,
+  };
 }
