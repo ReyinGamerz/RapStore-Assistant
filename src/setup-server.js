@@ -6,7 +6,7 @@ const LAYOUT = [
   { name: "━━ WELCOME ━━", channels: [
     { name: "👋・welcome", type: ChannelType.GuildText, access: "public", send: false },
     { name: "📜・rules", type: ChannelType.GuildText, access: "public", send: false },
-    { name: "📢・announcement", type: ChannelType.GuildText, access: "staff", send: false },
+    { name: "📢・announcement", type: ChannelType.GuildText, access: "staff", send: false, sendAccess: "admins" },
   ]},
   { name: "━━ STORE ━━", channels: [
     { name: "🛒・catalog", type: ChannelType.GuildText, access: "public", send: false },
@@ -72,10 +72,32 @@ export async function setupServer(guild) {
       if (spec.access === "public") allowedNames = publicRoles;
       else if (spec.access === "staff") allowedNames = staffRoles;
       else if (spec.access === "admins") allowedNames = adminRoles;
-      else allowedNames = ["Founder", "Admin", "Rap-Bot", "Staff", "Helper", "Reseller", "Customer"];
+      else if (spec.access === "customer") allowedNames = ["Founder", "Admin", "Rap-Bot", "Staff", "Helper", "Reseller", "Customer"];
+      else allowedNames = [];
+      const sendNames = spec.sendAccess === "admins"
+        ? adminRoles
+        : spec.sendAccess === "staff"
+          ? staffRoles
+          : spec.send
+            ? allowedNames
+            : [];
       const overwrites = [
-        { id: everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
-        ...allowedNames.map(name => ({ id: roleMap.get(name).id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory, ...(spec.send ? [PermissionFlagsBits.SendMessages, PermissionFlagsBits.AddReactions] : [])], deny: spec.send ? [] : [PermissionFlagsBits.SendMessages] })),
+        { id: everyone.id, deny: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.AddReactions, PermissionFlagsBits.CreatePublicThreads, PermissionFlagsBits.CreatePrivateThreads, PermissionFlagsBits.SendMessagesInThreads] },
+        ...publicRoles.map(name => {
+          const canView = allowedNames.includes(name);
+          const canSend = sendNames.includes(name);
+          return {
+            id: roleMap.get(name).id,
+            allow: [
+              ...(canView ? [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory] : []),
+              ...(canSend ? [PermissionFlagsBits.SendMessages, PermissionFlagsBits.AddReactions, PermissionFlagsBits.SendMessagesInThreads] : []),
+            ],
+            deny: [
+              ...(!canView ? [PermissionFlagsBits.ViewChannel] : []),
+              ...(!canSend ? [PermissionFlagsBits.SendMessages, PermissionFlagsBits.AddReactions, PermissionFlagsBits.CreatePublicThreads, PermissionFlagsBits.CreatePrivateThreads, PermissionFlagsBits.SendMessagesInThreads] : []),
+            ],
+          };
+        }),
       ];
       const treePrefix = channelIndex === 0 ? "╭" : channelIndex === section.channels.length - 1 ? "╰" : "┊";
       const channelName = treePrefix + "・" + spec.name.replace("・", "：");
