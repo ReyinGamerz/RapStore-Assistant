@@ -8,7 +8,7 @@ import { randomBytes } from "node:crypto";
 import { ObjectId } from "mongodb";
 import { config } from "./config.js";
 import { connectDatabase, closeDatabase, getDatabase } from "./database.js";
-import { refreshGlobalCommands } from "./global-commands.js";
+import { refreshGuildCommands } from "./global-commands.js";
 import { buildMessage, buildComponentsOnly, buildPanel } from "./ui.js";
 import { isStaffMember, canAccessTicket, canManuallyCloseTicket } from "./security.js";
 import { reconcileMissingTicket } from "./ticket-recovery.js";
@@ -119,7 +119,11 @@ function categoryDisplay(category) {
 }
 function renderEmoji(emoji) {
   if (!emoji) return "";
-  if (emoji.id) return "<" + (emoji.animated ? "a" : "") + ":" + emoji.name + ":" + emoji.id + ">";
+  if (emoji.id) {
+    const guild = client?.guilds?.cache?.get(config.guildId);
+    if (!guild?.emojis?.cache?.has(emoji.id)) return "";
+    return "<" + (emoji.animated ? "a" : "") + ":" + emoji.name + ":" + emoji.id + ">";
+  }
   return emoji.name || "";
 }
 async function findCanonicalCategory(name) {
@@ -203,7 +207,7 @@ async function showCategoryPicker(interaction, mode, productId = "", responseMod
     .addOptions(categories.map(category => {
       const display = categoryDisplay(category);
       const option = { label: display.name.slice(0, 100), value: encodeCategory(category.name), description: "Gunakan kategori ini" };
-      if (display.emoji) option.emoji = display.emoji;
+      if (display.emoji && (!display.emoji.id || client?.guilds?.cache?.get(config.guildId)?.emojis?.cache?.has(display.emoji.id))) option.emoji = display.emoji;
       return option;
     }));
   const panel = buildPanel("PILIH KATEGORI", "Pilih kategori yang sudah ada. Untuk membuat atau mengganti nama kategori, gunakan tombol kategori di panel utama.");
@@ -498,7 +502,12 @@ async function handleRemoveEmojiComponent(interaction) {
 async function refreshPersistentPanels(readyClient, onlyType = null) {
   const db = getDatabase();
   const types = onlyType ? [onlyType] : ["catalog", "panel"];
-  for (const guild of readyClient.guilds.cache.values()) {
+  const guild = readyClient.guilds.cache.get(config.guildId) || await readyClient.guilds.fetch(config.guildId).catch(() => null);
+  if (!guild) {
+    console.error("[persistent-panel-startup-sync] Configured GUILD_ID " + config.guildId + " is not available to this bot; skipping panel sync.");
+    return;
+  }
+  {
     for (const type of types) {
       try {
         const channelId = configuredPanelChannelId(type);
@@ -564,7 +573,7 @@ async function showProductPicker(interaction, mode) {
     .addOptions(products.map(p => {
       const option = {label:safeText(p.name,100),value:String(p._id),description:(safeText(p.category||"Umum",80)+" • "+formatPrice(p.price)).slice(0,100)};
       const emoji = parseDiscordEmoji(p.emoji);
-      if (emoji) option.emoji = emoji;
+      if (emoji && (!emoji.id || client?.guilds?.cache?.get(config.guildId)?.emojis?.cache?.has(emoji.id))) option.emoji = emoji;
       return option;
     }));
   const isEdit = mode === "editproduct";
@@ -1248,6 +1257,12 @@ async function handleCatalogOrderButton(interaction) {
 }
 
 async function handleInteraction(interaction) {
+  if (interaction.inGuild() && interaction.guildId !== config.guildId) {
+    if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
+      await interaction.reply({ content: "Bot ini hanya aktif di server toko yang dikonfigurasi.", flags: MessageFlags.Ephemeral });
+    }
+    return;
+  }
   if ((interaction.isButton() || interaction.isStringSelectMenu() || interaction.isModalSubmit()) &&
       (interaction.customId.startsWith("rapstore:order:") || interaction.customId.startsWith("rapstore:payment:") || interaction.customId.startsWith("rapstore:vouch:"))) {
     await handleOrderInteraction(interaction, client); return;
@@ -1375,6 +1390,7 @@ async function main() {
     })().catch(error => logError("ticket-channel-delete-cleanup", error));
   });
   client.on(Events.MessageCreate, message => {
+    if (message.guildId !== config.guildId) return;
     void handleOrderMessage(message, client).catch(error => logError("order-message", error));
   });
   client.once(Events.ClientReady, readyClient => {
@@ -1386,7 +1402,8 @@ async function main() {
   const readyClient = client.isReady() ? client : await ready;
   stopOrderMaintenance = startOrderMaintenance(client);
   try {
-    await refreshGlobalCommands();
+    if (!readyClient.guilds.cache.has(config.guildId)) throw new Error("Bot tidak tergabung di GUILD_ID " + config.guildId);
+    await refreshGuildCommands();
   } catch (error) {
     logError("global-command-refresh", error);
     console.error("Bot tetap berjalan, tetapi refresh global slash commands belum selesai. Periksa izin aplikasi bot dan jalankan npm run commands:refresh lagi.");
