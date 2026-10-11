@@ -2,18 +2,6 @@ import { ChannelType, PermissionFlagsBits } from "discord.js";
 
 const ROLE_NAMES = ["Founder", "Admin", "Rap-Bot", "Staff", "Helper", "Reseller", "Booster", "Customer", "Visitor"];
 
-const ROLE_PERMISSIONS = {
-  Founder: [PermissionFlagsBits.Administrator],
-  Admin: [PermissionFlagsBits.ManageGuild, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageRoles, PermissionFlagsBits.ViewAuditLog, PermissionFlagsBits.ManageMessages, PermissionFlagsBits.KickMembers, PermissionFlagsBits.BanMembers],
-  "Rap-Bot": [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks, PermissionFlagsBits.AttachFiles, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageRoles],
-  Staff: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages],
-  Helper: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
-  Reseller: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
-  Booster: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
-  Customer: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AddReactions],
-  Visitor: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory],
-};
-
 const LAYOUT = [
   { name: "━━ WELCOME ━━", channels: [
     { name: "👋・welcome", type: ChannelType.GuildText, access: "public", send: false },
@@ -40,37 +28,20 @@ const LAYOUT = [
   ]},
 ];
 
-function overwriteFor(role, send) {
-  const perms = { ViewChannel: true, ReadMessageHistory: true };
-  if (send) { perms.SendMessages = true; perms.AddReactions = true; }
-  else perms.SendMessages = false;
-  return perms;
-}
-
 export async function setupServer(guild) {
-  if (!guild.members.me?.permissions.has(PermissionFlagsBits.ManageChannels) ||
-      !guild.members.me?.permissions.has(PermissionFlagsBits.ManageRoles)) {
-    throw new Error("Bot perlu izin Manage Channels dan Manage Roles. Pastikan role bot berada di atas role yang akan dibuat.");
+  if (!guild.members.me?.permissions.has(PermissionFlagsBits.ManageChannels)) {
+    throw new Error("Bot perlu izin Manage Channels untuk membuat channel dan mengatur permission.");
   }
 
   const roleMap = new Map();
+  const missingRoles = [];
   for (const name of ROLE_NAMES) {
-    let role = guild.roles.cache.find(item => item.name === name);
-    if (!role) {
-      role = await guild.roles.create({
-        name,
-        permissions: ROLE_PERMISSIONS[name] || [],
-        mentionable: false,
-        reason: "/setupserver role setup",
-      });
-    } else {
-      await role.edit({
-        permissions: ROLE_PERMISSIONS[name] || [],
-        mentionable: false,
-        reason: "/setupserver role permission sync",
-      });
-    }
-    roleMap.set(name, role);
+    const role = guild.roles.cache.find(item => item.name === name);
+    if (!role) missingRoles.push(name);
+    else roleMap.set(name, role);
+  }
+  if (missingRoles.length) {
+    throw new Error("Buat role ini secara manual terlebih dahulu (nama harus persis sama): " + missingRoles.join(", ") + ". Belum ada channel yang dihapus.");
   }
 
   const allChannels = await guild.channels.fetch();
