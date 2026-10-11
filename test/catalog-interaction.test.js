@@ -60,8 +60,8 @@ test("catalog category navigation displays a page counter and cycles categories"
 test("catalog no longer exposes a ticket-destination dropdown", () => {
   assert.doesNotMatch(source, /rapstore:catalog:ticket/);
   assert.doesNotMatch(source, /Pilih Tujuan Tiket/);
-  assert.match(source, /\.setCustomId\("rapstore:catalog:category" \+ ownerSuffix\)/);
-  assert.match(source, /\.setCustomId\("rapstore:catalog:product" \+ ownerSuffix\)/);
+  assert.match(source, /\.setCustomId\("rapstore:catalog:category"\)/);
+  assert.match(source, /\.setCustomId\("rapstore:catalog:product"\)/);
 });
 
 test("confirming an order revalidates the product and uses the guarded order-ticket flow", () => {
