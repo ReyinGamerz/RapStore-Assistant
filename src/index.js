@@ -898,7 +898,7 @@ async function buildCatalogPayload(selectedCategory = "", selectedProductId = ""
     .addOptions((categories.length ? categories : ["Belum ada kategori"]).slice(0, 25).map(c => {
       const display = categoryDisplay({name:c,emoji:categoryEmojiMap.get(c)});
       const option = { label: display.name.slice(0, 100), value: c, description: "Buka katalog kategori " + display.name, default: Boolean(category) && c === category };
-      if (display.emoji) option.emoji = display.emoji;
+      if (display.emoji && (!display.emoji.id || client?.guilds?.cache?.get(config.guildId)?.emojis?.cache?.has(display.emoji.id))) option.emoji = display.emoji;
       return option;
     }));
   if (!categories.length) categoryMenu.setDisabled(true);
@@ -915,7 +915,7 @@ async function buildCatalogPayload(selectedCategory = "", selectedProductId = ""
       default: Boolean(selectedProduct) && String(p._id) === String(selectedProduct._id),
     };
     const emoji = parseDiscordEmoji(p.emoji);
-    if (emoji) option.emoji = emoji;
+    if (emoji && (!emoji.id || client?.guilds?.cache?.get(config.guildId)?.emojis?.cache?.has(emoji.id))) option.emoji = emoji;
     return option;
   });
   if (productOptions.length) productMenu.addOptions(productOptions);
