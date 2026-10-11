@@ -83,6 +83,23 @@ export async function setupServer(guild) {
     throw new Error("Buat role ini secara manual terlebih dahulu (nama harus persis sama): " + missingRoles.join(", ") + ". Belum ada channel yang dihapus.");
   }
 
+  // Apply least-privilege baseline permissions to existing manually-created roles.
+  // Do not grant Administrator; it bypasses channel/category restrictions.
+  const rolePermissions = {
+    "Founder": [],
+    "Admin": [P.ViewChannel, P.SendMessages, P.ReadMessageHistory, P.EmbedLinks, P.AttachFiles, P.ManageMessages, P.ModerateMembers, P.KickMembers, P.BanMembers],
+    "Rap-Bot": [P.ViewChannel, P.SendMessages, P.ReadMessageHistory, P.EmbedLinks, P.AttachFiles, P.ManageMessages, P.ManageChannels, P.ManageRoles, P.ModerateMembers],
+    "Staff": [P.ViewChannel, P.SendMessages, P.ReadMessageHistory, P.EmbedLinks, P.AttachFiles, P.ManageMessages, P.ModerateMembers],
+    "Helper": [P.ViewChannel, P.SendMessages, P.ReadMessageHistory, P.EmbedLinks, P.AttachFiles],
+    "Reseller": [P.ViewChannel, P.SendMessages, P.ReadMessageHistory, P.EmbedLinks, P.AttachFiles],
+    "Booster": [P.ViewChannel, P.SendMessages, P.ReadMessageHistory, P.EmbedLinks, P.AttachFiles, P.ChangeNickname],
+    "Customer": [P.ViewChannel, P.SendMessages, P.ReadMessageHistory, P.EmbedLinks, P.AttachFiles],
+    "Visitor": [P.ViewChannel, P.SendMessages, P.ReadMessageHistory, P.EmbedLinks, P.AttachFiles],
+  };
+  for (const [name, permissions] of Object.entries(rolePermissions)) {
+    await roleMap.get(name).setPermissions(permissions, "Set least-privilege role permissions through /setupserver");
+  }
+
   const allChannels = await guild.channels.fetch();
   const deletable = [...allChannels.values()].filter(Boolean);
   // /setupserver is destructive by design and must only be run on the test server.
