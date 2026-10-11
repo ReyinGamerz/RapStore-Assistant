@@ -1,6 +1,7 @@
 import { SlashCommandBuilder } from "discord.js";
 
 export const commandDefinitions = [
+  new SlashCommandBuilder().setName("setupserver").setDescription("Founder/Admin: bangun ulang struktur server, role, dan permission.").addBooleanOption(option => option.setName("konfirmasi_hapus").setDescription("WAJIB true: hapus semua channel/category yang ada di server ini").setRequired(true)),
   new SlashCommandBuilder().setName("catalog").setDescription("Buka katalog produk interaktif."),
   new SlashCommandBuilder().setName("panel").setDescription("Panel Founder/Admin untuk tambah dan edit produk."),
   new SlashCommandBuilder()
