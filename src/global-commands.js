@@ -12,13 +12,15 @@ export async function refreshGuildCommands({ guildIds = [] } = {}) {
     { body },
   );
 
-  // Clear the old global set and any legacy guild copies outside the configured store guild.
+  // Keep the full store command set in the configured store guild. Other joined
+  // guilds receive only /setupserver so a fresh test server can be initialized.
   await rest.put(Routes.applicationCommands(config.discordClientId), { body: [] });
+  const setupOnly = commandDefinitions.filter(command => command.name === "setupserver").map(command => command.toJSON());
   const otherGuildIds = [...new Set(guildIds.map(id => String(id || "").trim()).filter(id => /^\\d{17,20}$/.test(id) && id !== config.guildId))];
   const cleanupErrors = [];
   for (const guildId of otherGuildIds) {
     try {
-      await rest.put(Routes.applicationGuildCommands(config.discordClientId, guildId), { body: [] });
+      await rest.put(Routes.applicationGuildCommands(config.discordClientId, guildId), { body: setupOnly });
     } catch (error) {
       cleanupErrors.push({ guildId, message: error instanceof Error ? error.message : String(error) });
     }
@@ -29,7 +31,7 @@ export async function refreshGuildCommands({ guildIds = [] } = {}) {
   }
 
   const count = Array.isArray(registered) ? registered.length : body.length;
-  console.log(`Guild slash commands refreshed: ${count} in guild ${config.guildId}. Cleared global commands and ${otherGuildIds.length} other guild(s).`);
+  console.log(`Guild slash commands refreshed: ${count} in guild ${config.guildId}; /setupserver registered in ${otherGuildIds.length} other guild(s).`);
 
   return registered;
 }
