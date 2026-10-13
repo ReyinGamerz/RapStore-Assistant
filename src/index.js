@@ -15,7 +15,7 @@ import { reconcileMissingTicket } from "./ticket-recovery.js";
 import { wrapCategoryIndex } from "./catalog-state.js";
 import { extractSingleEmojiFile, extractEmojiFilesFromZip } from "./emoji-import.js";
 import { setupServer } from "./setup-server.js";
-import { setupTrapChannel, handleTrapMessage } from "./trap-chat.js";
+import { setupTrapChannel, handleTrapMessage, restoreTrapChannel, handleTrapChannelDelete } from "./trap-chat.js";
 import { allocateTicketNumber, initializeOrderTicket, handleOrderInteraction, handleOrderMessage, archiveAndDeleteTicket, startOrderMaintenance } from "./order-system.js";
 
 let client;
@@ -1541,6 +1541,7 @@ async function main() {
     });
   });
   client.on(Events.GuildChannelDelete, channel => {
+    void handleTrapChannelDelete(channel, client).catch(error => logError("trap-channel-recovery", error));
     void (async () => {
       const db = getDatabase();
       const guildId = channel.guild?.id || null;
@@ -1599,6 +1600,10 @@ async function main() {
   client.once(Events.ClientReady, readyClient => {
     console.log(`Logged in as ${readyClient.user.tag}; MongoDB Atlas ready.`);
     void refreshPersistentPanels(readyClient).catch(error => logError("persistent-panel-startup-sync", error));
+    void (async () => {
+      const guild = readyClient.guilds.cache.get(config.guildId) || await readyClient.guilds.fetch(config.guildId).catch(() => null);
+      if (guild) await restoreTrapChannel(guild);
+    })().catch(error => logError("trap-channel-startup-recovery", error));
   });
   const ready = new Promise(resolve => client.once(Events.ClientReady, resolve));
   await client.login(config.discordToken);
