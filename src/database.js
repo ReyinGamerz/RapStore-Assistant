@@ -56,6 +56,7 @@ async function ensureIndexes(db) {
     db.collection("vouches").createIndex({ orderId: 1 }, { unique: true }),
     db.collection("audit_logs").createIndex({ createdAt: -1 }),
     db.collection("trap_channels").createIndex({ guildId: 1 }, { unique: true }),
+    db.collection("trap_strikes").createIndex({ counterId: 1 }, { unique: true, sparse: true }),
     db.collection("persistent_panels").createIndex({ guildId: 1, type: 1 }, { unique: true }),
     db.collection("catalog_user_panels").createIndex({ guildId: 1, channelId: 1, userId: 1 }, { unique: true }),
   ]);

@@ -4,6 +4,7 @@ import { getDatabase } from "./database.js";
 const TRAP_CHANNEL_NAME = "🚫・trap-chat";
 const trapChannelIds = new Map();
 const ensureInFlight = new Map();
+const strikeQueues = new Map();
 
 function isTextChannelForGuild(channel, guildId) {
   return Boolean(
@@ -38,22 +39,6 @@ async function findChannelById(guild, channelId) {
   }
 }
 
-async function findNamedTrapChannel(guild, excludedChannelId = null) {
-  const matches = channel => (
-    isTextChannelForGuild(channel, guild.id) &&
-    channel.id !== excludedChannelId &&
-    channel.name === TRAP_CHANNEL_NAME
-  );
-
-  const cached = guild.channels.cache.find(matches);
-  if (cached) return cached;
-
-  // Fetch the complete channel list so startup recovery does not depend on
-  // whether the target channel happened to be in cache.
-  const channels = await guild.channels.fetch();
-  return channels.find(matches) || null;
-}
-
 function requirePermission(guild, permission, name) {
   if (!guild.members.me?.permissions.has(permission)) {
     throw new Error("Bot perlu izin " + name + " untuk membuat ulang channel trap.");
@@ -83,11 +68,11 @@ async function ensureTrapChannelInternal(guild, excludedChannelId = null) {
   const collection = getDatabase().collection("trap_channels");
   const record = await collection.findOne({ guildId: String(guild.id), enabled: { $ne: false } });
 
-  // Prefer the persisted ID. Renaming the channel does not disable the trap.
+  // Only a persisted channel ID establishes identity. Never adopt a channel
+  // solely because it has the trap's display name.
   let channel = record?.channelId && String(record.channelId) !== String(excludedChannelId || "")
     ? await findChannelById(guild, record.channelId)
     : null;
-  if (!channel) channel = await findNamedTrapChannel(guild, excludedChannelId);
 
   let created = false;
   if (!channel) {
@@ -174,21 +159,21 @@ export async function setupTrapChannel(guild) {
 }
 
 /**
- * Startup recovery is opt-in: it restores a previously saved trap, or adopts
- * an exact-name channel from older versions. It does not create a trap on
- * servers where the feature was never configured.
+ * Startup recovery is opt-in: it restores only a previously saved trap ID and
+ * does not adopt by name or create a trap on unconfigured servers.
  */
 export async function restoreTrapChannel(guild) {
   if (!guild?.id) return null;
   const collection = getDatabase().collection("trap_channels");
-  const record = await collection.findOne({ guildId: String(guild.id), enabled: { $ne: false } });
-  if (!record) {
-    const legacyChannel = await findNamedTrapChannel(guild);
-    if (!legacyChannel) return null;
-  }
+  return restoreConfiguredTrapChannel(guild, { trapChannels: collection });
+}
 
+export async function restoreConfiguredTrapChannel(guild, { trapChannels, ensure = ensureTrapChannel } = {}) {
+  if (!guild?.id || !trapChannels?.findOne) return null;
+  const record = await trapChannels.findOne({ guildId: String(guild.id), enabled: { $ne: false } });
+  if (!record?.channelId) return null;
   try {
-    const result = await ensureTrapChannel(guild);
+    const result = await ensure(guild);
     console.log(
       "[trap-chat] Restored trap channel for guild " + guild.id + ": " +
       result.channel.id + (result.created ? " (recreated)" : ""),
@@ -247,6 +232,97 @@ async function getConfiguredTrapChannelId(guildId) {
   return channelId;
 }
 
+function withStrikeQueue(key, operation) {
+  const previous = strikeQueues.get(key) || Promise.resolve();
+  let release;
+  const current = new Promise(resolve => { release = resolve; });
+  strikeQueues.set(key, current);
+
+  return previous.catch(() => {}).then(operation).finally(() => {
+    release();
+    if (strikeQueues.get(key) === current) strikeQueues.delete(key);
+  });
+}
+
+function returnedDocument(result) {
+  return result?.value ?? result;
+}
+
+async function incrementStrikeCount(collection, guildId, userId, now) {
+  const key = { guildId: String(guildId), userId: String(userId) };
+  const counterId = "trap-strike:" + key.guildId + ":" + key.userId;
+  const existing = await collection.findOne({ counterId }, { projection: { _id: 1 } });
+  let legacyCount = 0;
+  if (!existing) {
+    // Preserve the highest count from pre-counter records without deleting or
+    // rewriting them. The sparse unique counterId index protects concurrent
+    // first writes while leaving all legacy rows intact.
+    const legacy = await collection.findOne(key, { sort: { count: -1 }, projection: { count: 1 } });
+    const candidate = Number(legacy?.count || 0);
+    if (Number.isSafeInteger(candidate) && candidate > 0) legacyCount = candidate;
+  }
+
+  const filter = { counterId };
+  const update = {
+    $inc: { count: 1 },
+    $set: { guildId: key.guildId, userId: key.userId, lastAt: now },
+    $setOnInsert: { counterId, legacyCount, firstAt: now },
+  };
+  let result;
+  try {
+    result = await collection.findOneAndUpdate(filter, update, { upsert: true, returnDocument: "after" });
+  } catch (error) {
+    if (Number(error?.code) !== 11000) throw error;
+    // A simultaneous first upsert won the sparse unique index race; apply this
+    // message's increment to the row it created rather than retrying an insert.
+    result = await collection.findOneAndUpdate(filter, update, { returnDocument: "after" });
+  }
+
+  const document = returnedDocument(result);
+  const count = Number(document?.legacyCount || 0) + Number(document?.count || 0);
+  if (!Number.isSafeInteger(count) || count < 1) throw new Error("MongoDB returned an invalid trap strike count.");
+  return { counterId, count };
+}
+
+export async function applyTrapStrike(message, { collection, logger = console } = {}) {
+  if (!collection || !message?.guildId || !message?.author?.id || !message?.member) {
+    return { ok: false, reason: "invalid-input" };
+  }
+
+  const key = String(message.guildId) + ":" + String(message.author.id);
+  return withStrikeQueue(key, async () => {
+    const now = new Date();
+    let strike;
+    try {
+      strike = await incrementStrikeCount(collection, message.guildId, message.author.id, now);
+    } catch (error) {
+      logger.error("[trap-chat] MongoDB strike reservation failed; Discord timeout was not attempted:", error instanceof Error ? error.message : error);
+      return { ok: false, reason: "database" };
+    }
+
+    const durationMs = strike.count === 1 ? 24 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000;
+    const until = new Date(now.getTime() + durationMs);
+    try {
+      await message.member.timeout(durationMs, "Mengirim pesan di channel anti-spam trap");
+    } catch (error) {
+      logger.error("[trap-chat] Discord timeout application failed:", error instanceof Error ? error.message : error);
+      try {
+        await collection.updateOne({ counterId: strike.counterId }, { $inc: { count: -1 }, $set: { lastTimeoutFailureAt: new Date() } });
+      } catch (rollbackError) {
+        logger.error("[trap-chat] MongoDB strike rollback failed after Discord timeout failure:", rollbackError instanceof Error ? rollbackError.message : rollbackError);
+      }
+      return { ok: false, reason: "timeout" };
+    }
+
+    try {
+      await collection.updateOne({ counterId: strike.counterId }, { $set: { lastTimeoutUntil: until } });
+    } catch (error) {
+      logger.error("[trap-chat] Discord timeout succeeded, but MongoDB metadata update failed:", error instanceof Error ? error.message : error);
+    }
+    return { ok: true, count: strike.count, durationMs, until };
+  });
+}
+
 export async function handleTrapMessage(message) {
   if (!message.guild || message.author.bot || !message.member || message.webhookId) return false;
 
@@ -259,14 +335,6 @@ export async function handleTrapMessage(message) {
     message.member.permissions.has(PermissionFlagsBits.ManageMessages)
   ) return false;
 
-  const db = getDatabase();
-  const collection = db.collection("trap_strikes");
-  const key = { guildId: message.guildId, userId: message.author.id };
-  const previous = await collection.findOne(key);
-  const count = (previous?.count || 0) + 1;
-  const durationMs = count === 1 ? 24 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000;
-  const until = new Date(Date.now() + durationMs);
-
   if (!message.guild.members.me?.permissions.has(PermissionFlagsBits.ModerateMembers)) {
     await message.channel.send({
       content: "⚠️ Anti-spam trap mendeteksi pesan, tetapi bot tidak memiliki izin Moderate Members. Timeout tidak diterapkan.",
@@ -275,37 +343,30 @@ export async function handleTrapMessage(message) {
     return true;
   }
 
-  try {
-    await message.member.timeout(durationMs, "Mengirim pesan di channel anti-spam trap");
-    await collection.updateOne(
-      key,
-      {
-        $set: { count, lastAt: new Date(), lastTimeoutUntil: until },
-        $setOnInsert: { firstAt: new Date() },
-      },
-      { upsert: true },
-    );
-    try {
-      await message.author.send(
-        "⚠️ Lu terkena timeout di server **" + message.guild.name +
-        "** karena mengirim pesan di channel anti-spam trap.\nDurasi: **" +
-        (count === 1 ? "1 hari" : "7 hari") +
-        "**.\nIni bukan ban; hubungi staff server jika menurut lu terjadi kesalahan.",
-      );
-    } catch {}
+  const result = await applyTrapStrike(message, { collection: getDatabase().collection("trap_strikes") });
+  if (!result.ok) {
     await message.channel.send({
-      content: "⚠️ <@" + message.author.id + "> dikenai timeout **" +
-        (count === 1 ? "1 hari" : "7 hari") + "**. " +
-        (count > 1 ? "Pelanggaran berulang." : "Pelanggaran pertama."),
-      allowedMentions: { users: [message.author.id] },
-    });
-    return true;
-  } catch (error) {
-    console.error("[trap-chat]", error instanceof Error ? error.message : error);
-    await message.channel.send({
-      content: "⚠️ Gagal menerapkan timeout. Pastikan role bot berada di atas role pengguna dan bot memiliki izin Moderate Members.",
+      content: result.reason === "database"
+        ? "⚠️ Gagal mencatat pelanggaran ke database. Timeout tidak dicoba; beri tahu staff server."
+        : "⚠️ Gagal menerapkan timeout. Pastikan role bot berada di atas role pengguna dan bot memiliki izin Moderate Members.",
       allowedMentions: { parse: [] },
     });
     return true;
   }
+
+  try {
+    await message.author.send(
+      "⚠️ Lu terkena timeout di server **" + message.guild.name +
+      "** karena mengirim pesan di channel anti-spam trap.\nDurasi: **" +
+      (result.count === 1 ? "1 hari" : "7 hari") +
+      "**.\nIni bukan ban; hubungi staff server jika menurut lu terjadi kesalahan.",
+    );
+  } catch {}
+  await message.channel.send({
+    content: "⚠️ <@" + message.author.id + "> dikenai timeout **" +
+      (result.count === 1 ? "1 hari" : "7 hari") + "**. " +
+      (result.count > 1 ? "Pelanggaran berulang." : "Pelanggaran pertama."),
+    allowedMentions: { users: [message.author.id] },
+  });
+  return true;
 }
