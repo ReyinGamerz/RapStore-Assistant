@@ -1348,6 +1348,10 @@ async function handleSetupTrapCommand(interaction) {
     await interaction.reply({ content: "Perintah ini hanya bisa digunakan di server Discord.", flags: MessageFlags.Ephemeral });
     return;
   }
+  if (interaction.guildId !== config.guildId) {
+    await interaction.reply({ content: "Anti-spam trap hanya aktif di server yang dikonfigurasi untuk bot ini.", flags: MessageFlags.Ephemeral });
+    return;
+  }
   const member = interaction.member;
   const allowed = member?.permissions?.has(PermissionFlagsBits.Administrator) ||
     member?.permissions?.has(PermissionFlagsBits.ManageGuild) || hasFounderRole(member);
