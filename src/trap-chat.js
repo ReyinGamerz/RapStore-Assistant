@@ -84,7 +84,9 @@ async function ensureTrapChannelInternal(guild, excludedChannelId = null) {
   const record = await collection.findOne({ guildId: String(guild.id), enabled: { $ne: false } });
 
   // Prefer the persisted ID. Renaming the channel does not disable the trap.
-  let channel = await findChannelById(guild, record?.channelId);
+  let channel = record?.channelId && String(record.channelId) !== String(excludedChannelId || "")
+    ? await findChannelById(guild, record.channelId)
+    : null;
   if (!channel) channel = await findNamedTrapChannel(guild, excludedChannelId);
 
   let created = false;
