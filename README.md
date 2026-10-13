@@ -43,6 +43,12 @@ For a new install, run `npm install`, copy `.env.example` to `.env`, then set `D
 - Products come from the MongoDB `products` collection and only active products are displayed. Add or edit intended products in `/panel` with their correct category and price.
 - The category and product menus remain below the list. The catalog uses one shared public panel. When any member chooses a category or presses `PREV/NEXT`, that same panel updates for everyone. `PREV/NEXT` wrap around (`2/2` + `NEXT` → `1/2`; `1/2` + `PREV` → `2/2`) and are disabled when there is only one category. The ticket-destination menu is removed. Selecting an active product opens a separate ephemeral order confirmation with `Ya, Lanjutkan` and `Batalkan`. Only `Ya, Lanjutkan` creates an order ticket; `Batalkan` deletes the private confirmation without creating a ticket. The support-ticket opening flow is intentionally not exposed in the catalog yet.
 
+## Anti-spam trap
+- Run `/setuptrap` once to create or register the trap channel. The exact channel ID is saved in MongoDB, so renaming the channel or restarting the bot does not break detection.
+- Enforcement matches the saved channel ID only; other channels with names containing `trap` are ignored.
+- If the saved channel is deleted while the bot is online, the bot attempts to recreate it immediately. If it is deleted while the bot is offline, startup recovery recreates it the next time the bot starts. If Discord permissions prevent recovery, the saved configuration remains and the bot retries on a later restart; check Manage Channels, Send Messages, Moderate Members, and the bot role hierarchy.
+- Startup recovery does not create a trap on a server where the feature was never configured. Older installations are adopted if the exact `🚫・trap-chat` channel already exists.
+
 ## Tickets
 - Order channels use persistent sequential names such as `rap-1`, `rap-2`; support tickets have a separate reserved counter and naming scheme such as `support-0`, `support-1`. The support-ticket opening flow will be added separately and is not available from the catalog yet.
 - Every ticket receives one random public `ticketCode` (5–10 characters, e.g. `&JI$U`). The same code is stored on the ticket and order, displayed below the order status, included in the ticket channel topic, and used in the transcript HTML filename. The MongoDB `_id` remains an internal database key. This shared code is intended to support future lookups such as `/cektranscript ID`.
