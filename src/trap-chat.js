@@ -139,7 +139,19 @@ async function ensureTrapChannelInternal(guild, excludedChannelId = null) {
 function ensureTrapChannel(guild, excludedChannelId = null) {
   const guildId = String(guild.id);
   const inFlight = ensureInFlight.get(guildId);
-  if (inFlight) return inFlight;
+  if (inFlight) {
+    // A deletion event can race with startup recovery. If the in-flight work
+    // resolves to the channel that was just deleted, run recovery again after
+    // the current lock has been released.
+    if (excludedChannelId) {
+      return inFlight.then(result =>
+        String(result.channel.id) === String(excludedChannelId)
+          ? ensureTrapChannel(guild, excludedChannelId)
+          : result
+      );
+    }
+    return inFlight;
+  }
 
   const promise = ensureTrapChannelInternal(guild, excludedChannelId)
     .finally(() => {
